@@ -1,0 +1,31 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install:*)",
+      "Bash(/home/mheloy/.vscode-server/cli/servers/Stable-bdd88df003631aaa0bcbe057cb0a940b80a476fa/server/node:*)",
+      "Bash(curl:*)",
+      "Bash(bash)",
+      "Bash(export PATH=\"$HOME/.local/share/fnm:$PATH\")",
+      "Bash(fnm install:*)",
+      "Bash(node --version:*)",
+      "Bash(npm --version:*)",
+      "Bash(export NVM_DIR=\"$HOME/.nvm\")",
+      "Bash([ -s \"$NVM_DIR/nvm.sh\" ])",
+      "Bash(source \"$NVM_DIR/nvm.sh\")",
+      "Bash(nvm install:*)",
+      "Bash(. \"$NVM_DIR/nvm.sh\")",
+      "Bash(timeout 10 node:*)",
+      "Bash(timeout 10 npx vite:*)",
+      "Bash(node -e:*)",
+      "Bash(node:*)",
+      "Bash(npx -y acorn-jsx:*)",
+      "Bash(npx vite build:*)",
+      "Bash(bash -c 'export NVM_DIR=\"\"$HOME/.nvm\"\" && . \"\"$NVM_DIR/nvm.sh\"\" && npx vite build 2>&1 | tail -30')",
+      "Bash(bash -c 'export NVM_DIR=\"\"$HOME/.nvm\"\" && . \"\"$NVM_DIR/nvm.sh\"\" && timeout 5 node server/index.js 2>&1 || true')",
+      "Bash(bash -c 'export NVM_DIR=\"\"$HOME/.nvm\"\" && . \"\"$NVM_DIR/nvm.sh\"\" && lsof -i :3001 -t')",
+      "Bash(ps:*)",
+      "Bash(kill:*)",
+      "Bash(lsof:*)"
+    ]
+  }
+}

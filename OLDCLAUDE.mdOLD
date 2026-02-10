@@ -1,0 +1,1762 @@
+# NEXUS Trading Bot — Complete Development Blueprint
+
+> **Purpose**: This document is a self-contained, modular blueprint for building a personal Forex & Commodities trading signal bot. It is designed to be handed to Claude Code in any new session so it can reproduce, extend, or modify the system reliably.
+>
+> **Version**: 2.0  
+> **Last Updated**: February 2026  
+> **Stack**: React (JSX) single-file artifact · Recharts · Tailwind-compatible inline styles · Node.js backend for Telegram & Twelve Data  
+> **Scope**: Live market data via Twelve Data API · Telegram signal alerts · Virtual trading with real-world-grade technical analysis logic
+
+---
+
+## Table of Contents
+
+1. [Project Overview & Philosophy](#1-project-overview--philosophy)
+2. [Architecture Overview](#2-architecture-overview)
+3. [Module 1 — Market Data Engine (Twelve Data)](#3-module-1--market-data-engine-twelve-data)
+4. [Module 2 — Technical Analysis Core](#4-module-2--technical-analysis-core)
+5. [Module 3 — Signal Generator (Confluence System)](#5-module-3--signal-generator-confluence-system)
+6. [Module 4 — Virtual Trading Engine](#6-module-4--virtual-trading-engine)
+7. [Module 5 — Backtesting Engine](#7-module-5--backtesting-engine)
+8. [Module 6 — Charting & Visualization](#8-module-6--charting--visualization)
+9. [Module 7 — Reporting & Performance Analytics](#9-module-7--reporting--performance-analytics)
+10. [Module 8 — UI Shell & Navigation](#10-module-8--ui-shell--navigation)
+11. [Module 9 — Twelve Data Integration](#11-module-9--twelve-data-integration)
+12. [Module 10 — Telegram Bot Integration](#12-module-10--telegram-bot-integration)
+13. [Indicator Research & Rationale](#13-indicator-research--rationale)
+14. [Configuration Reference](#14-configuration-reference)
+15. [Environment Variables & Secrets](#15-environment-variables--secrets)
+16. [Extension Roadmap](#16-extension-roadmap)
+17. [Prompt for Claude Code](#17-prompt-for-claude-code)
+
+---
+
+## 1. Project Overview & Philosophy
+
+### What This Bot Does
+
+This is a **signal-generating trading assistant** that tells you when to BUY or SELL based on technical analysis. It does not execute real trades — it operates in a virtual sandbox so you can validate strategies before risking capital.
+
+### Core Principles
+
+- **Confluence over single indicators**: No trade fires unless 2–3 indicators agree. This dramatically reduces false signals.
+- **Support & Resistance is king**: S/R levels are the primary decision layer. RSI and MACD serve as confirmation filters.
+- **Trend-following, not counter-trend**: The bot follows the market's momentum rather than trying to predict reversals.
+- **Backtest what you trade**: The backtesting engine uses the exact same signal logic as the live simulation — no discrepancy between what you test and what you execute.
+- **Full transparency**: Every signal shows its reasoning (which indicators triggered, at what values, near which S/R level).
+
+### Feature Checklist
+
+| Feature | Status | Module |
+|---------|--------|--------|
+| Multi-pair support (Forex + Gold) | ✅ | Data Engine |
+| Support & Resistance detection | ✅ | TA Core |
+| RSI (14) with overbought/oversold zones | ✅ | TA Core |
+| MACD (12, 26, 9) with histogram | ✅ | TA Core |
+| SMA 20 / SMA 50 for trend context | ✅ | TA Core |
+| Confluence-based BUY/SELL signals | ✅ | Signal Generator |
+| Live price simulation (1.5s tick) | ✅ | Data Engine |
+| Virtual trade execution (BUY/SELL) | ✅ | Trading Engine |
+| Auto Stop-Loss and Take-Profit | ✅ | Trading Engine |
+| Manual position close | ✅ | Trading Engine |
+| Backtesting with configurable params | ✅ | Backtest Engine |
+| Equity curve visualization | ✅ | Charting |
+| Price chart with S/R overlay | ✅ | Charting |
+| RSI chart with zones | ✅ | Charting |
+| MACD chart with histogram + signal | ✅ | Charting |
+| Volume chart | ✅ | Charting |
+| Portfolio overview & balance tracking | ✅ | Reporting |
+| Win/loss distribution chart | ✅ | Reporting |
+| Complete trade history log | ✅ | Reporting |
+| Performance metrics dashboard | ✅ | Reporting |
+| **Twelve Data REST API — historical candles** | ✅ | Twelve Data |
+| **Twelve Data WebSocket — real-time prices** | ✅ | Twelve Data |
+| **Twelve Data built-in indicators (RSI, MACD)** | ✅ | Twelve Data |
+| **Auto-fallback to simulated data (no API key)** | ✅ | Data Engine |
+| **Telegram signal alerts (BUY/SELL)** | ✅ | Telegram |
+| **Telegram trade status & position updates** | ✅ | Telegram |
+| **Telegram daily performance summary** | ✅ | Telegram |
+| **Telegram command interface (/status, /signals)** | ✅ | Telegram |
+
+---
+
+## 2. Architecture Overview
+
+### High-Level Data Flow
+
+```
+┌──────────────────────────────┐
+│  Twelve Data API (Primary)   │
+│  REST: Historical candles    │
+│  WebSocket: Real-time ticks  │
+│  Indicators: RSI, MACD, SMA  │
+└──────────────┬───────────────┘
+               │ (fallback: simulated data if no API key)
+               ▼
+        Market Data Engine
+               │
+               ▼
+     Technical Analysis Core
+        ┌─────────────────┐
+        │ Support/Resistance │
+        │ RSI (14)           │
+        │ MACD (12,26,9)     │
+        │ SMA 20 / SMA 50   │
+        └─────────────────┘
+               │
+               ▼
+  Signal Generator (Confluence Scoring)
+               │
+    ┌──────────┼──────────────────────┐
+    │          │                      │
+    ▼          ▼                      ▼
+ Dashboard   Virtual Trading     Backtesting
+              Engine               Engine
+    │          │                      │
+    └──────────┼──────────────────────┘
+               │
+               ▼
+     Reporting & Analytics
+               │
+               ▼
+    ┌─────────────────────┐
+    │   Telegram Bot       │
+    │   • Signal alerts    │
+    │   • Trade updates    │
+    │   • Daily summaries  │
+    │   • Command interface│
+    └─────────────────────┘
+```
+
+### System Architecture (Two-Process Model)
+
+The system runs as **two processes**:
+
+1. **Frontend (React JSX)**: The dashboard UI — runs in the browser, handles charts, virtual trading, and backtest visualization. Communicates with the backend via REST API.
+
+2. **Backend (Node.js server)**: Handles Twelve Data API calls (to protect API keys), runs the Telegram bot, manages WebSocket connections for live data, and serves processed data to the frontend.
+
+```
+Browser (React JSX)              Node.js Server
+┌──────────────────┐            ┌──────────────────────────┐
+│ Dashboard UI     │◄──REST────►│ /api/candles             │
+│ Charts           │            │ /api/indicators          │
+│ Virtual Trading  │◄──WS──────►│ /api/live (WebSocket)    │
+│ Backtest Viewer  │            │ /api/signals             │
+│ Reports          │            │ /api/positions           │
+└──────────────────┘            │                          │
+                                │ Twelve Data Client ──────┤──► Twelve Data API
+                                │ Telegram Bot ────────────┤──► Telegram API
+                                │ Signal Engine            │
+                                │ Trade Manager            │
+                                └──────────────────────────┘
+```
+
+### State Architecture
+
+All state lives in the top-level React component. There is no external state manager — `useState` and `useCallback` handle everything. This is intentional for portability.
+
+```
+State Tree:
+├── pair              (string)     — Active currency pair
+├── timeframe         (string)     — Chart timeframe
+├── tab               (string)     — Active UI tab
+├── data[]            (array)      — Enriched price data with indicators
+├── srLevels[]        (array)      — Detected S/R levels
+├── signals[]         (array)      — Generated trade signals
+├── isLive            (boolean)    — Live simulation toggle
+├── dataSource        (string)     — "twelvedata" | "simulated"
+├── connectionStatus  (string)     — "connected" | "disconnected" | "error"
+├── balance           (number)     — Current virtual balance
+├── openPositions[]   (array)      — Active trades
+├── tradeLog[]        (array)      — Completed trade history
+├── backtestResults   (object)     — Latest backtest output
+├── btConfig          (object)     — Backtest parameters
+├── telegramStatus    (string)     — "active" | "inactive" | "error"
+└── lastTelegramAlert (object)     — Most recent Telegram notification sent
+```
+
+---
+
+## 3. Module 1 — Market Data Engine (Twelve Data)
+
+### Purpose
+
+Provides real-time and historical price data to the entire system. Uses **Twelve Data API** as the primary data source with automatic fallback to simulated data when no API key is configured or when API limits are reached.
+
+### Data Source Priority
+
+```
+1. Twelve Data WebSocket  → Real-time ticks (live mode)
+2. Twelve Data REST API   → Historical candles (initial load + backtest)
+3. Simulated Generator    → Fallback when API unavailable
+```
+
+### Supported Pairs
+
+| Pair | Twelve Data Symbol | Pip Size | Category |
+|------|-------------------|----------|----------|
+| EUR/USD | `EUR/USD` | 0.0001 | Forex |
+| GBP/USD | `GBP/USD` | 0.0001 | Forex |
+| USD/JPY | `USD/JPY` | 0.01 | Forex |
+| XAU/USD (Gold) | `XAU/USD` | 0.01 | Commodity |
+| USD/CAD | `USD/CAD` | 0.0001 | Forex |
+| AUD/USD | `AUD/USD` | 0.0001 | Forex |
+
+### Timeframe Mapping
+
+| UI Label | Twelve Data `interval` | Description |
+|----------|----------------------|-------------|
+| 1M | `1min` | 1-minute candles |
+| 5M | `5min` | 5-minute candles |
+| 15M | `15min` | 15-minute candles |
+| 1H | `1h` | 1-hour candles |
+| 4H | `4h` | 4-hour candles |
+| 1D | `1day` | Daily candles |
+
+### Data Flow: Initial Load
+
+```
+User selects pair + timeframe
+    │
+    ▼
+Backend calls Twelve Data REST API:
+  GET /time_series?symbol={pair}&interval={tf}&outputsize=200
+    │
+    ▼
+Normalize response into standard candle format:
+  { time, timestamp, open, high, low, close, volume }
+    │
+    ▼
+Feed to Technical Analysis Core → Indicators → Signals
+    │
+    ▼
+Send to frontend via REST: GET /api/candles?pair=EUR/USD&tf=15min
+```
+
+### Data Flow: Live Mode
+
+```
+Frontend enables LIVE mode
+    │
+    ▼
+Backend opens Twelve Data WebSocket:
+  ws.subscribe({ symbol: "EUR/USD", ... })
+    │
+    ▼
+On each price tick:
+  - Update latest candle or create new candle
+  - Recalculate indicators
+  - Run signal generator
+  - If new signal → push to frontend + send Telegram alert
+    │
+    ▼
+Frontend receives via WebSocket: ws://localhost:3001/api/live
+```
+
+### Simulated Fallback
+
+When the Twelve Data API key is not configured or the API returns errors, the system automatically falls back to the simulated data generator. This uses the same three-layer movement model from v1.0:
+
+1. **Trend component**: `sin(i / 30) * volatility * 3`
+2. **Noise component**: `random() * volatility * 2`
+3. **Momentum component**: `sin(i / 15) * volatility`
+
+The fallback is transparent — the rest of the system doesn't know or care whether data is real or simulated. The UI shows a badge indicating the data source ("LIVE — Twelve Data" or "SIMULATED").
+
+### Standard Candle Object
+
+Every data point, regardless of source, is normalized to this shape:
+
+```javascript
+{
+  time: number,         // Unix timestamp in ms
+  timestamp: string,    // Human-readable "HH:MM" or "HH:MM:SS"
+  open: number,
+  high: number,
+  low: number,
+  close: number,
+  volume: number
+}
+```
+
+---
+
+## 4. Module 2 — Technical Analysis Core
+
+This module contains all indicator calculation functions. Each is a pure function: data in, numbers out.
+
+### 4.1 Simple Moving Average — `calcSMA(data, period)`
+
+**What it does**: Averages the closing prices over the last `period` candles.
+
+**Formula**: `SMA = (C₁ + C₂ + ... + Cₙ) / n`
+
+**Usage in the bot**: SMA 20 and SMA 50 are calculated and plotted. When SMA 20 > SMA 50, the trend is bullish. When SMA 20 < SMA 50, bearish.
+
+**Implementation detail**: Returns `null` for the first `period - 1` candles (insufficient data).
+
+```
+Input:  data[] (array of candle objects), period (integer)
+Output: number[] (same length as data, nulls for insufficient data)
+```
+
+### 4.2 Exponential Moving Average — `calcEMA(data, period)`
+
+**What it does**: Like SMA but gives more weight to recent prices, making it more responsive.
+
+**Formula**: `EMA = Price × k + EMA_prev × (1 - k)`, where `k = 2 / (period + 1)`
+
+**Usage in the bot**: Used internally by the MACD calculation (EMA 12 and EMA 26). Not plotted directly but is a critical building block.
+
+**Implementation detail**: The first EMA value is seeded with the SMA of the first `period` candles.
+
+```
+Input:  data[] (array of candle objects), period (integer)
+Output: number[] (same length as data, nulls for insufficient data)
+```
+
+### 4.3 Relative Strength Index — `calcRSI(data, period = 14)`
+
+**What it does**: Measures the speed and magnitude of price changes to identify overbought or oversold conditions. Ranges from 0 to 100.
+
+**Formula**:
+```
+RS = Average Gain / Average Loss (over `period` candles)
+RSI = 100 - (100 / (1 + RS))
+```
+
+**Interpretation**:
+- RSI < 30 → **Oversold** (potential buy signal)
+- RSI 30–40 → Mildly oversold (weak buy)
+- RSI 40–60 → Neutral
+- RSI 60–70 → Mildly overbought (weak sell)
+- RSI > 70 → **Overbought** (potential sell signal)
+
+**Usage in the bot**: RSI contributes a score to the confluence system. Oversold adds +1 to +2 to buy score; overbought adds -1 to -2 to sell score.
+
+```
+Input:  data[] (array of candle objects), period (default 14)
+Output: number[] (0-100 scale, nulls for first `period` candles)
+```
+
+### 4.4 MACD — `calcMACD(data)`
+
+**What it does**: Moving Average Convergence Divergence measures trend momentum using the relationship between two EMAs.
+
+**Components**:
+- **MACD Line**: EMA(12) - EMA(26) — measures momentum
+- **Signal Line**: EMA(9) of the MACD Line — smoothed momentum
+- **Histogram**: MACD Line - Signal Line — shows momentum acceleration
+
+**Interpretation**:
+- MACD crosses above Signal → **Bullish crossover** (buy signal, +2 score)
+- MACD crosses below Signal → **Bearish crossover** (sell signal, -2 score)
+- Histogram growing → Momentum increasing (adds ±0.5 to score)
+
+**Usage in the bot**: Crossovers are the primary MACD signal. Histogram growth direction adds supplementary weight.
+
+```
+Input:  data[] (array of candle objects)
+Output: { macd: number[], signal: number[], histogram: number[] }
+```
+
+### 4.5 Support & Resistance — `calcSupportResistance(data, lookback = 20)`
+
+**What it does**: Identifies price levels where the market has historically reversed. These are the most important levels in the system — they define *where* trades should happen.
+
+**Algorithm**:
+
+1. **Pivot detection**: For each candle, check if its high is the highest or its low is the lowest within `lookback` candles on both sides. If yes, it's a pivot point.
+2. **Clustering**: Group nearby levels (within 0.2% of each other) to avoid duplicates. Clustered levels are stronger.
+3. **Strength scoring**: The more touches a level has, the stronger it is. Strength = number of pivot points in the cluster.
+4. **Ranking**: Sort by strength descending, keep top 6 levels.
+
+**Output structure**:
+```javascript
+{
+  type: "support" | "resistance",
+  price: number,           // Average price of the cluster
+  strength: number,        // Number of touches
+  touches: number          // Same as strength (for display)
+}
+```
+
+**Usage in the bot**: When price is within 0.3% of a support level, add positive score (buy). When within 0.3% of resistance, add negative score (sell). The strength multiplier means stronger levels produce stronger signals.
+
+---
+
+## 5. Module 3 — Signal Generator (Confluence System)
+
+### Purpose
+
+This is the brain of the bot. It combines all indicator readings into a single weighted score and only produces a signal when the confluence threshold is met.
+
+### How `generateSignals(data, srLevels)` Works
+
+For each candle from index 30 onward (ensuring all indicators are populated):
+
+#### Step 1: Calculate S/R Score
+
+```
+For each S/R level:
+  distance = |price - level.price| / price
+  if distance < 0.003 (within 0.3%):
+    if level is SUPPORT and price >= level:  srScore += level.strength
+    if level is RESISTANCE and price <= level: srScore -= level.strength
+```
+
+#### Step 2: Calculate RSI Score
+
+```
+RSI < 30  → rsiScore = +2  (strong oversold)
+RSI < 40  → rsiScore = +1  (mild oversold)
+RSI > 70  → rsiScore = -2  (strong overbought)
+RSI > 60  → rsiScore = -1  (mild overbought)
+else      → rsiScore = 0   (neutral)
+```
+
+#### Step 3: Calculate MACD Score
+
+```
+Bullish crossover (MACD crosses above Signal) → macdScore = +2
+Bearish crossover (MACD crosses below Signal) → macdScore = -2
+Histogram growing → macdScore += 0.5
+Histogram shrinking → macdScore -= 0.5
+```
+
+#### Step 4: Combine & Threshold
+
+```
+totalScore = srScore + rsiScore + macdScore
+confidence = min(100, |totalScore| × 20)
+
+if totalScore >= 3 AND confidence >= 40%  → BUY signal
+if totalScore <= -3 AND confidence >= 40% → SELL signal
+```
+
+### Signal Output Structure
+
+```javascript
+{
+  index: number,           // Candle index in data array
+  time: number,            // Unix timestamp
+  timestamp: string,       // Human-readable time
+  type: "BUY" | "SELL",
+  price: number,           // Price at signal
+  confidence: number,      // 0-100 percentage
+  reasons: string[],       // Human-readable reasons
+  rsi: number,             // RSI value at signal
+  macd: number,            // MACD value at signal
+  macdSignal: number       // MACD signal line value
+}
+```
+
+### Why This Combination Works
+
+The three indicators cover different dimensions of price action:
+
+| Indicator | Dimension | Question It Answers |
+|-----------|-----------|-------------------|
+| Support & Resistance | **Structure** | *Where* is price likely to reverse? |
+| RSI | **Momentum** | *When* is momentum exhausted? |
+| MACD | **Trend** | *Which direction* is the trend moving? |
+
+A signal fires only when all three agree: price is at a key structural level (S/R), momentum is stretched (RSI), and the trend is confirming (MACD). This triple filter eliminates most false signals.
+
+---
+
+## 6. Module 4 — Virtual Trading Engine
+
+### Purpose
+
+Simulates real trade execution with stop-loss, take-profit, and position management — without risking real money.
+
+### Trade Execution Flow
+
+```
+User clicks BUY or SELL
+    │
+    ▼
+Create position object:
+  - entry price = current market price
+  - SL = entry ± 0.2%
+  - TP = entry ± 0.4%
+  - lot size = 0.1 standard lots
+    │
+    ▼
+Add to openPositions[]
+    │
+    ▼
+On each live tick (every 1.5s):
+  - Recalculate P&L for each open position
+  - Check: has price hit SL? → close with loss
+  - Check: has price hit TP? → close with profit
+  - Update currentPrice, pnl, pnlPct
+    │
+    ▼
+On position close:
+  - Add pnl to balance
+  - Move position from openPositions[] to tradeLog[]
+  - Record exit reason: "Stop Loss" | "Take Profit" | "Manual Close"
+```
+
+### P&L Calculation
+
+```javascript
+// For BUY positions:
+pnl = (currentPrice - entryPrice) * lotSize * 100000
+pnlPct = (currentPrice - entryPrice) / entryPrice * 100
+
+// For SELL positions:
+pnl = (entryPrice - currentPrice) * lotSize * 100000
+pnlPct = (entryPrice - currentPrice) / entryPrice * 100
+```
+
+The multiplier `100000` converts the price difference to USD P&L for a standard lot. With `lotSize = 0.1`, this is a mini lot (10,000 units).
+
+### Position Object Structure
+
+```javascript
+{
+  id: number,              // Unique ID (timestamp)
+  type: "BUY" | "SELL",
+  pair: string,
+  entry: number,           // Entry price
+  lotSize: number,         // 0.1 default
+  entryTime: number,       // Unix timestamp
+  entryTimestamp: string,
+  sl: number,              // Stop loss price
+  tp: number,              // Take profit price
+  currentPrice: number,    // Updated each tick
+  pnl: number,             // Current P&L in $
+  pnlPct: number           // Current P&L in %
+}
+```
+
+### Closed Trade Object (added to tradeLog)
+
+```javascript
+{
+  ...positionFields,
+  exit: number,            // Exit price
+  exitTime: number,
+  exitTimestamp: string,
+  pnl: number,             // Final P&L
+  pnlPct: number,          // Final P&L %
+  result: "WIN" | "LOSS",
+  exitReason: "Stop Loss" | "Take Profit" | "Manual Close"
+}
+```
+
+---
+
+## 7. Module 5 — Backtesting Engine
+
+### Purpose
+
+Runs the **exact same signal logic** against historical data to measure strategy performance before going live. This is critical — if you can't prove the strategy works historically, you shouldn't trade it live.
+
+### How `runBacktest(data, srLevels, config)` Works
+
+```
+1. Generate 500 candles of historical data
+2. Calculate S/R levels on that data
+3. Run generateSignals() — same function as live
+4. Walk through each candle:
+   a. If position open → check SL/TP
+   b. If no position → check for signal at this candle
+   c. Record trade results
+5. Compute aggregate statistics
+```
+
+### Configurable Parameters
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| stopLoss | 0.002 (0.2%) | Maximum loss before auto-close |
+| takeProfit | 0.004 (0.4%) | Profit target before auto-close |
+| lotSize | 0.1 | Position size in standard lots |
+| balance | $10,000 | Starting virtual balance |
+
+### Output Statistics
+
+```javascript
+{
+  trades: [],              // Array of all completed trades
+  wins: number,            // Count of winning trades
+  losses: number,          // Count of losing trades
+  totalPnl: number,        // Net profit/loss in $
+  winRate: number,         // Win percentage (0-100)
+  avgWin: number,          // Average winning trade $
+  avgLoss: number,         // Average losing trade $
+  profitFactor: number,    // Gross profit / gross loss
+  maxDrawdown: number,     // Worst single trade loss
+  finalBalance: number,    // Ending balance
+  startBalance: number,    // Starting balance
+  equityCurve: []          // Balance at each trade for plotting
+}
+```
+
+### Key Metrics Explained
+
+- **Win Rate**: Percentage of trades that were profitable. Above 50% is generally good for this type of strategy.
+- **Profit Factor**: `(total wins) / (total losses)`. Above 1.5 is considered good; above 2.0 is excellent.
+- **Max Drawdown**: The largest single loss. Shows worst-case risk per trade.
+- **Equity Curve**: The visual trajectory of your balance over all trades. A steadily rising curve is ideal.
+
+### Consistency Guarantee
+
+The backtesting engine calls `generateSignals()` — the same function the live signal generator uses. There is zero divergence between backtest and live signals. This means:
+
+- If you change the signal logic, the backtest automatically uses the new logic
+- If you add a new indicator, it applies to both backtest and live
+- Parameters like SL/TP are passed through a shared config
+
+---
+
+## 8. Module 6 — Charting & Visualization
+
+### Chart Stack
+
+All charts use **Recharts** (React wrapper around D3). Charts are:
+
+| Chart | Component | Data Key(s) | Location |
+|-------|-----------|-------------|----------|
+| Price Action (with S/R) | `ComposedChart` | `close`, `sma20`, `sma50` + `ReferenceLine` for S/R | Charts tab |
+| Mini Price (dashboard) | `AreaChart` | `close` with gradient fill | Dashboard |
+| RSI | `AreaChart` | `rsi` with reference lines at 30/70 | Charts tab |
+| MACD | `ComposedChart` | `macd`, `macdSignal` (lines) + `histogram` (bars) | Charts tab |
+| Volume | `BarChart` | `volume` | Charts tab |
+| Equity Curve | `AreaChart` | `balance` from backtest equityCurve | Backtest tab |
+| Win/Loss Distribution | `BarChart` | `pnl` from tradeLog | Reports tab |
+
+### S/R Overlay on Price Chart
+
+Support and resistance levels are rendered as `ReferenceLine` components with dashed strokes:
+
+- **Support**: Green dashed line with label "S {price}"
+- **Resistance**: Red dashed line with label "R {price}"
+
+These update dynamically as new data arrives.
+
+### Color Scheme
+
+```javascript
+const colors = {
+  bg: "#0a0e17",           // Deep navy background
+  panel: "#111827",         // Panel background
+  panelBorder: "#1e293b",   // Subtle borders
+  accent: "#22d3ee",        // Cyan accent (primary)
+  buy: "#10b981",           // Green for buy/profit
+  sell: "#ef4444",          // Red for sell/loss
+  text: "#e2e8f0",          // Light text
+  textMuted: "#64748b",     // Secondary text
+  gold: "#fbbf24",          // Warning/highlight
+  purple: "#a78bfa",        // RSI/secondary indicator
+};
+```
+
+---
+
+## 9. Module 7 — Reporting & Performance Analytics
+
+### Portfolio Overview
+
+Displays a 5-card summary:
+
+1. **Starting Balance**: $10,000 (constant reference)
+2. **Current Balance**: Starting + all closed P&L
+3. **Net P&L**: Sum of all closed trades
+4. **Return %**: `(current - starting) / starting × 100`
+5. **Open Exposure**: Number of currently open positions
+
+### Performance Metrics
+
+Calculated from `tradeLog[]`:
+
+- Total trades, wins, losses
+- Win rate percentage
+- Best trade (highest P&L)
+- Worst trade (lowest P&L)
+- Average trade P&L
+
+### Win/Loss Distribution Chart
+
+A bar chart where each bar represents one closed trade. Green bars above the zero line for wins, red bars below for losses. This gives an instant visual read of consistency.
+
+### Complete Trade History Table
+
+Columns: `#`, `Pair`, `Type`, `Entry`, `Exit`, `P&L`, `Result`, `Reason`, `Balance After`
+
+---
+
+## 10. Module 8 — UI Shell & Navigation
+
+### Tab Structure
+
+| Tab | Purpose | Key Components |
+|-----|---------|---------------|
+| **Dashboard** | At-a-glance overview | Latest signal, mini chart, S/R levels, signal history, session stats |
+| **Charts** | Full technical analysis view | Price + S/R + SMAs, RSI, MACD, Volume |
+| **Virtual Trade** | Trade execution | BUY/SELL buttons, open positions, indicator readings |
+| **Backtest** | Strategy validation | Config inputs, run button, results, equity curve, trade log |
+| **Reports** | Performance tracking | Portfolio overview, win/loss chart, metrics, full history |
+
+### Header Bar
+
+- Pair selector (dropdown)
+- Timeframe selector (dropdown)
+- Live toggle button (▶ LIVE / ■ STOP)
+- Current price with change indicator
+- Balance display
+- Live indicator (pulsing red dot)
+
+### Panel Component
+
+Every section is wrapped in a reusable `<Panel>` component:
+
+```javascript
+<Panel title="SECTION TITLE" span={2}>  {/* span for grid column span */}
+  {children}
+</Panel>
+```
+
+---
+
+## 11. Module 9 — Twelve Data Integration
+
+### Purpose
+
+Connects the bot to **real, live market data** from Twelve Data (https://twelvedata.com). This replaces the simulated data generator with actual Forex and commodity prices, while keeping the simulated fallback for offline development or when API limits are reached.
+
+### Why Twelve Data
+
+- Covers Forex, commodities (Gold, Silver, Oil), crypto, and equities — all from one API
+- Real-time WebSocket feed for live price streaming
+- Built-in technical indicators (RSI, MACD, SMA, EMA, etc.) — can cross-validate our local calculations
+- Historical time series data with up to 5000 candles per request
+- Subscription-based with generous rate limits for paid tiers
+
+### Account Requirements
+
+You need an active Twelve Data subscription. The relevant plan features:
+
+| Feature | Free | Starter | Essential |
+|---------|------|---------|-----------|
+| API calls/min | 8 | 30 | 120 |
+| WebSocket symbols | 1 | 5 | 50 |
+| Historical depth | 1 month | 5 years | 30 years |
+| Real-time data | Delayed | Real-time | Real-time |
+
+For this bot, **Starter or above** is recommended (multiple WebSocket symbols for multi-pair monitoring).
+
+### 9.1 REST API — Historical Data
+
+**Endpoint**: `GET https://api.twelvedata.com/time_series`
+
+**Used for**: Initial chart load, backtest data, and filling gaps.
+
+```javascript
+// Backend: server/twelvedata.js
+
+const TWELVE_DATA_BASE = "https://api.twelvedata.com";
+
+async function fetchCandles(symbol, interval, outputsize = 200) {
+  const url = `${TWELVE_DATA_BASE}/time_series?` + new URLSearchParams({
+    symbol,                    // "EUR/USD"
+    interval,                  // "15min", "1h", "4h", "1day"
+    outputsize: String(outputsize),  // Number of candles (max 5000)
+    apikey: process.env.TWELVEDATA_API_KEY,
+    timezone: "UTC",
+    format: "JSON"
+  });
+
+  const response = await fetch(url);
+  const data = await response.json();
+
+  if (data.status === "error") {
+    throw new Error(`Twelve Data Error: ${data.message}`);
+  }
+
+  // Normalize to standard candle format (Twelve Data returns newest first)
+  return data.values.reverse().map(candle => ({
+    time: new Date(candle.datetime).getTime(),
+    timestamp: new Date(candle.datetime).toLocaleTimeString([], {
+      hour: "2-digit", minute: "2-digit"
+    }),
+    open: parseFloat(candle.open),
+    high: parseFloat(candle.high),
+    low: parseFloat(candle.low),
+    close: parseFloat(candle.close),
+    volume: parseInt(candle.volume) || 0
+  }));
+}
+```
+
+**Important**: Twelve Data returns candles in **newest-first** order. Always `.reverse()` before feeding to the TA Core.
+
+**Rate limit handling**: Implement exponential backoff on 429 responses:
+
+```javascript
+async function fetchWithRetry(url, maxRetries = 3) {
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    const resp = await fetch(url);
+    if (resp.status === 429) {
+      const wait = Math.pow(2, attempt) * 1000;  // 1s, 2s, 4s
+      console.log(`Rate limited. Retrying in ${wait}ms...`);
+      await new Promise(r => setTimeout(r, wait));
+      continue;
+    }
+    return resp.json();
+  }
+  throw new Error("Max retries exceeded");
+}
+```
+
+### 9.2 REST API — Built-in Indicators
+
+Twelve Data can compute indicators server-side. This is useful for **cross-validation** against our local calculations.
+
+```javascript
+// Fetch RSI directly from Twelve Data
+async function fetchRSI(symbol, interval, period = 14) {
+  const url = `${TWELVE_DATA_BASE}/rsi?` + new URLSearchParams({
+    symbol, interval,
+    time_period: String(period),
+    outputsize: "200",
+    apikey: process.env.TWELVEDATA_API_KEY
+  });
+  const data = await fetch(url).then(r => r.json());
+  return data.values.reverse().map(v => parseFloat(v.rsi));
+}
+
+// Fetch MACD directly from Twelve Data
+async function fetchMACD(symbol, interval) {
+  const url = `${TWELVE_DATA_BASE}/macd?` + new URLSearchParams({
+    symbol, interval,
+    fast_period: "12",
+    slow_period: "26",
+    signal_period: "9",
+    outputsize: "200",
+    apikey: process.env.TWELVEDATA_API_KEY
+  });
+  const data = await fetch(url).then(r => r.json());
+  return data.values.reverse().map(v => ({
+    macd: parseFloat(v.macd),
+    signal: parseFloat(v.macd_signal),
+    histogram: parseFloat(v.macd_hist)
+  }));
+}
+```
+
+**Strategy**: Use local indicator calculations as primary (faster, no API cost) and Twelve Data indicators as optional validation. Log discrepancies above 1% for debugging.
+
+### 9.3 WebSocket — Real-Time Price Feed
+
+**Endpoint**: `wss://ws.twelvedata.com/v1/quotes/price`
+
+**Used for**: Live mode — streams real-time price updates.
+
+```javascript
+// Backend: server/websocket-client.js
+
+const WebSocket = require("ws");
+
+class TwelveDataStream {
+  constructor(apiKey) {
+    this.apiKey = apiKey;
+    this.ws = null;
+    this.subscribers = new Map();  // symbol -> callback[]
+    this.reconnectAttempts = 0;
+    this.maxReconnects = 10;
+  }
+
+  connect() {
+    this.ws = new WebSocket(`wss://ws.twelvedata.com/v1/quotes/price?apikey=${this.apiKey}`);
+
+    this.ws.on("open", () => {
+      console.log("Twelve Data WebSocket connected");
+      this.reconnectAttempts = 0;
+      // Re-subscribe to all symbols on reconnect
+      for (const symbol of this.subscribers.keys()) {
+        this._subscribe(symbol);
+      }
+    });
+
+    this.ws.on("message", (raw) => {
+      const data = JSON.parse(raw);
+      if (data.event === "price") {
+        const callbacks = this.subscribers.get(data.symbol) || [];
+        const tick = {
+          symbol: data.symbol,
+          price: parseFloat(data.price),
+          timestamp: data.timestamp * 1000,  // Convert to ms
+          bid: parseFloat(data.bid || data.price),
+          ask: parseFloat(data.ask || data.price),
+          volume: parseInt(data.day_volume || 0)
+        };
+        callbacks.forEach(cb => cb(tick));
+      }
+    });
+
+    this.ws.on("close", () => {
+      if (this.reconnectAttempts < this.maxReconnects) {
+        const delay = Math.min(30000, Math.pow(2, this.reconnectAttempts) * 1000);
+        console.log(`WebSocket closed. Reconnecting in ${delay}ms...`);
+        setTimeout(() => this.connect(), delay);
+        this.reconnectAttempts++;
+      }
+    });
+
+    this.ws.on("error", (err) => {
+      console.error("WebSocket error:", err.message);
+    });
+  }
+
+  subscribe(symbol, callback) {
+    if (!this.subscribers.has(symbol)) {
+      this.subscribers.set(symbol, []);
+      if (this.ws?.readyState === WebSocket.OPEN) {
+        this._subscribe(symbol);
+      }
+    }
+    this.subscribers.get(symbol).push(callback);
+  }
+
+  _subscribe(symbol) {
+    this.ws.send(JSON.stringify({
+      action: "subscribe",
+      params: { symbols: symbol }
+    }));
+  }
+
+  unsubscribe(symbol) {
+    this.subscribers.delete(symbol);
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify({
+        action: "unsubscribe",
+        params: { symbols: symbol }
+      }));
+    }
+  }
+
+  disconnect() {
+    this.maxReconnects = 0;  // Prevent auto-reconnect
+    this.ws?.close();
+  }
+}
+```
+
+### 9.4 Candle Aggregation from Ticks
+
+WebSocket ticks are raw prices. The backend must aggregate them into candles:
+
+```javascript
+class CandleAggregator {
+  constructor(intervalMs) {
+    this.intervalMs = intervalMs;  // e.g., 60000 for 1-minute candles
+    this.currentCandle = null;
+    this.candles = [];
+  }
+
+  addTick(tick) {
+    const candleStart = Math.floor(tick.timestamp / this.intervalMs) * this.intervalMs;
+
+    if (!this.currentCandle || this.currentCandle.time !== candleStart) {
+      // New candle
+      if (this.currentCandle) {
+        this.candles.push({ ...this.currentCandle });
+      }
+      this.currentCandle = {
+        time: candleStart,
+        timestamp: new Date(candleStart).toLocaleTimeString([], {
+          hour: "2-digit", minute: "2-digit"
+        }),
+        open: tick.price,
+        high: tick.price,
+        low: tick.price,
+        close: tick.price,
+        volume: tick.volume || 0
+      };
+    } else {
+      // Update existing candle
+      this.currentCandle.high = Math.max(this.currentCandle.high, tick.price);
+      this.currentCandle.low = Math.min(this.currentCandle.low, tick.price);
+      this.currentCandle.close = tick.price;
+      this.currentCandle.volume += tick.volume || 0;
+    }
+
+    return this.currentCandle;
+  }
+
+  getCandles(count = 200) {
+    const all = [...this.candles];
+    if (this.currentCandle) all.push(this.currentCandle);
+    return all.slice(-count);
+  }
+}
+```
+
+### 9.5 Twelve Data Interval Reference
+
+| Interval | Code | Candles/Day | Best For |
+|----------|------|-------------|----------|
+| 1 minute | `1min` | 1440 | Scalping |
+| 5 minutes | `5min` | 288 | Intraday |
+| 15 minutes | `15min` | 96 | Intraday swing |
+| 30 minutes | `30min` | 48 | Intraday swing |
+| 1 hour | `1h` | 24 | Swing trading |
+| 4 hours | `4h` | 6 | Position trading |
+| 1 day | `1day` | 1 | Long-term |
+| 1 week | `1week` | 0.2 | Trend analysis |
+
+### 9.6 Error Handling & Fallback Logic
+
+```javascript
+async function getMarketData(symbol, interval, count) {
+  try {
+    if (!process.env.TWELVEDATA_API_KEY) {
+      console.log("No API key — using simulated data");
+      return { source: "simulated", data: generateSimulatedData(symbol, count) };
+    }
+
+    const candles = await fetchCandles(symbol, interval, count);
+    return { source: "twelvedata", data: candles };
+
+  } catch (error) {
+    console.error("Twelve Data error, falling back to simulation:", error.message);
+    return { source: "simulated", data: generateSimulatedData(symbol, count) };
+  }
+}
+```
+
+---
+
+## 12. Module 10 — Telegram Bot Integration
+
+### Purpose
+
+Sends real-time trading alerts, position updates, and performance summaries directly to your phone via Telegram. This means you don't need to have the dashboard open — the bot watches the market and notifies you when action is needed. Configure appropriate slash commands for user experience
+
+### Setup: Creating Your Telegram Bot
+
+**Step 1: Create the bot**
+
+1. Open Telegram and search for `@BotFather`
+2. Send `/newbot`
+3. Name it (e.g., "NEXUS Trading Bot")
+4. Choose a username (e.g., `nexus_trading_bot`)
+5. BotFather returns a **Bot Token** — save this as `TELEGRAM_BOT_TOKEN`
+
+**Step 2: Get your Chat ID**
+
+1. Send any message to your new bot in Telegram
+2. Visit: `https://api.telegram.org/bot<YOUR_TOKEN>/getUpdates`
+3. Find `"chat": {"id": 123456789}` in the response
+4. Save this number as `TELEGRAM_CHAT_ID`
+
+**Step 3: Add to environment variables**
+
+```bash
+TELEGRAM_BOT_TOKEN=7123456789:AAH...your_token_here
+TELEGRAM_CHAT_ID=123456789
+```
+
+### 10.1 Bot Architecture
+
+```
+Signal Generator produces signal
+    │
+    ▼
+Telegram Notifier formats message
+    │
+    ▼
+Sends via Telegram Bot API:
+  POST https://api.telegram.org/bot{token}/sendMessage
+    │
+    ▼
+You receive alert on phone instantly
+```
+
+The Telegram module runs inside the Node.js backend server. It has three components:
+
+1. **Notifier** — Sends outbound messages (signals, updates, summaries)
+2. **Command Handler** — Processes incoming commands from you (/status, /signals, etc.)
+3. **Scheduler** — Sends periodic summaries (daily performance report)
+
+### 10.2 Core Implementation — Telegram Client
+
+```javascript
+// Backend: server/telegram.js
+
+class TelegramBot {
+  constructor(token, chatId) {
+    this.token = token;
+    this.chatId = chatId;
+    this.baseUrl = `https://api.telegram.org/bot${token}`;
+    this.lastSignalTime = 0;
+    this.cooldownMs = 60000;  // Min 1 minute between signal alerts
+  }
+
+  async sendMessage(text, options = {}) {
+    const body = {
+      chat_id: this.chatId,
+      text,
+      parse_mode: "HTML",
+      disable_web_page_preview: true,
+      ...options
+    };
+
+    try {
+      const resp = await fetch(`${this.baseUrl}/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      });
+      const result = await resp.json();
+      if (!result.ok) {
+        console.error("Telegram send failed:", result.description);
+      }
+      return result;
+    } catch (err) {
+      console.error("Telegram error:", err.message);
+    }
+  }
+
+  // ── Signal Alert ──
+  async sendSignalAlert(signal) {
+    // Cooldown: don't spam if signals are firing rapidly
+    if (Date.now() - this.lastSignalTime < this.cooldownMs) return;
+    this.lastSignalTime = Date.now();
+
+    const emoji = signal.type === "BUY" ? "🟢" : "🔴";
+    const arrow = signal.type === "BUY" ? "⬆️" : "⬇️";
+
+    const message = [
+      `${emoji} <b>NEXUS SIGNAL: ${signal.type}</b> ${arrow}`,
+      ``,
+      `<b>Pair:</b>    ${signal.pair}`,
+      `<b>Price:</b>   ${signal.price.toFixed(signal.digits)}`,
+      `<b>Confidence:</b> ${signal.confidence.toFixed(0)}%`,
+      `<b>Time:</b>    ${signal.timestamp}`,
+      ``,
+      `<b>Confluence Reasons:</b>`,
+      ...signal.reasons.map(r => `  ✓ ${r}`),
+      ``,
+      `<b>Indicators:</b>`,
+      `  RSI: ${signal.rsi?.toFixed(1) || "—"}`,
+      `  MACD: ${signal.macd?.toFixed(6) || "—"}`,
+      ``,
+      `<i>SL: ${signal.sl?.toFixed(signal.digits) || "—"} | TP: ${signal.tp?.toFixed(signal.digits) || "—"}</i>`,
+    ].join("\n");
+
+    await this.sendMessage(message);
+  }
+
+  // ── Trade Update ──
+  async sendTradeUpdate(trade, eventType) {
+    const emoji = {
+      "opened": "📖",
+      "closed_win": "✅",
+      "closed_loss": "❌",
+      "sl_hit": "🛑",
+      "tp_hit": "🎯"
+    }[eventType] || "📊";
+
+    const message = [
+      `${emoji} <b>TRADE ${eventType.toUpperCase()}</b>`,
+      ``,
+      `<b>${trade.type} ${trade.pair}</b>`,
+      `Entry: ${trade.entry.toFixed(trade.digits)}`,
+      trade.exit ? `Exit:  ${trade.exit.toFixed(trade.digits)}` : "",
+      trade.pnl !== undefined ? `P&L:   ${trade.pnl >= 0 ? "+" : ""}$${trade.pnl.toFixed(2)} (${trade.pnlPct.toFixed(2)}%)` : "",
+      trade.balanceAfter ? `Balance: $${trade.balanceAfter.toFixed(2)}` : "",
+    ].filter(Boolean).join("\n");
+
+    await this.sendMessage(message);
+  }
+
+  // ── Daily Summary ──
+  async sendDailySummary(stats) {
+    const emoji = stats.netPnl >= 0 ? "📈" : "📉";
+
+    const message = [
+      `${emoji} <b>NEXUS DAILY SUMMARY</b>`,
+      `━━━━━━━━━━━━━━━━━━`,
+      ``,
+      `<b>Net P&L:</b>     ${stats.netPnl >= 0 ? "+" : ""}$${stats.netPnl.toFixed(2)}`,
+      `<b>Trades:</b>      ${stats.totalTrades}`,
+      `<b>Win Rate:</b>    ${stats.winRate.toFixed(1)}%`,
+      `<b>Wins/Losses:</b> ${stats.wins}/${stats.losses}`,
+      `<b>Best Trade:</b>  +$${stats.bestTrade.toFixed(2)}`,
+      `<b>Worst Trade:</b> -$${Math.abs(stats.worstTrade).toFixed(2)}`,
+      ``,
+      `<b>Balance:</b>     $${stats.balance.toFixed(2)}`,
+      `<b>Open Positions:</b> ${stats.openPositions}`,
+      ``,
+      `<i>${stats.signalsGenerated} signals generated today</i>`,
+    ].join("\n");
+
+    await this.sendMessage(message);
+  }
+
+  // ── Market Status ──
+  async sendMarketStatus(pairs) {
+    const lines = pairs.map(p => {
+      const arrow = p.change >= 0 ? "▲" : "▼";
+      return `${p.symbol}: ${p.price.toFixed(p.digits)} ${arrow} ${Math.abs(p.changePct).toFixed(3)}%`;
+    });
+
+    const message = [
+      `📊 <b>MARKET STATUS</b>`,
+      `━━━━━━━━━━━━━━━━━━`,
+      ...lines,
+      ``,
+      `<i>Updated: ${new Date().toLocaleTimeString()}</i>`
+    ].join("\n");
+
+    await this.sendMessage(message);
+  }
+}
+```
+
+### 10.3 Command Handler — Receiving Commands from Telegram
+
+The bot also listens for commands you send it via Telegram, so you can query the system from your phone.
+
+```javascript
+// Backend: server/telegram-commands.js
+
+class TelegramCommandHandler {
+  constructor(bot, tradingEngine) {
+    this.bot = bot;
+    this.engine = tradingEngine;
+    this.pollingInterval = null;
+    this.lastUpdateId = 0;
+  }
+
+  startPolling(intervalMs = 2000) {
+    this.pollingInterval = setInterval(() => this.checkUpdates(), intervalMs);
+  }
+
+  async checkUpdates() {
+    try {
+      const url = `${this.bot.baseUrl}/getUpdates?offset=${this.lastUpdateId + 1}&timeout=1`;
+      const resp = await fetch(url).then(r => r.json());
+
+      if (resp.ok && resp.result.length > 0) {
+        for (const update of resp.result) {
+          this.lastUpdateId = update.update_id;
+          const text = update.message?.text;
+          if (text) await this.handleCommand(text);
+        }
+      }
+    } catch (err) {
+      console.error("Telegram polling error:", err.message);
+    }
+  }
+
+  async handleCommand(text) {
+    const cmd = text.toLowerCase().trim();
+
+    switch (cmd) {
+      case "/status":
+        // Returns current balance, open positions, data source
+        await this.bot.sendMessage(this.engine.getStatusReport());
+        break;
+
+      case "/signals":
+        // Returns last 5 signals
+        await this.bot.sendMessage(this.engine.getRecentSignalsReport());
+        break;
+
+      case "/positions":
+        // Returns all open positions with live P&L
+        await this.bot.sendMessage(this.engine.getOpenPositionsReport());
+        break;
+
+      case "/performance":
+        // Returns session performance stats
+        await this.bot.sendMessage(this.engine.getPerformanceReport());
+        break;
+
+      case "/market":
+        // Returns current prices for all pairs
+        await this.bot.sendMarketStatus(this.engine.getAllPairPrices());
+        break;
+
+      case "/help":
+        await this.bot.sendMessage([
+          "🤖 <b>NEXUS COMMANDS</b>",
+          "",
+          "/status — Balance & system status",
+          "/signals — Last 5 trade signals",
+          "/positions — Open positions & P&L",
+          "/performance — Win rate & metrics",
+          "/market — All pair prices",
+          "/daily — Today's summary",
+          "/help — This menu",
+        ].join("\n"));
+        break;
+
+      case "/daily":
+        await this.bot.sendDailySummary(this.engine.getDailyStats());
+        break;
+
+      default:
+        if (cmd.startsWith("/")) {
+          await this.bot.sendMessage(`Unknown command: ${cmd}\nType /help for available commands.`);
+        }
+    }
+  }
+
+  stop() {
+    if (this.pollingInterval) clearInterval(this.pollingInterval);
+  }
+}
+```
+
+### 10.4 Supported Telegram Commands
+
+| Command | Description | Example Response |
+|---------|-------------|-----------------|
+| `/status` | System status + balance | "Balance: $10,245.30 · 2 open positions · Source: Twelve Data LIVE" |
+| `/signals` | Last 5 generated signals | List of BUY/SELL signals with price, confidence, time |
+| `/positions` | Open positions with live P&L | "BUY EUR/USD @ 1.0850 · P&L: +$12.50 (+0.12%)" |
+| `/performance` | Session performance metrics | Win rate, total P&L, trade count, profit factor |
+| `/market` | All pair prices | "EUR/USD: 1.0852 ▲ 0.018% · GBP/USD: 1.2661 ▼ 0.042%" |
+| `/daily` | Today's performance summary | Net P&L, trades, wins/losses, balance |
+| `/help` | List all commands | Command menu with descriptions |
+
+### 10.5 Alert Trigger Rules
+
+Not every event should produce a Telegram notification. These are the trigger rules:
+
+| Event | Sends Alert? | Cooldown |
+|-------|-------------|----------|
+| New BUY/SELL signal | ✅ Yes | 60 seconds min between signals |
+| Position opened | ✅ Yes | None |
+| Position closed (win) | ✅ Yes | None |
+| Position closed (loss) | ✅ Yes | None |
+| Stop loss hit | ✅ Yes | None |
+| Take profit hit | ✅ Yes | None |
+| Price tick update | ❌ No | — (too frequent) |
+| Indicator recalculation | ❌ No | — (internal event) |
+| Daily summary | ✅ Yes | Once per day (scheduled) |
+| WebSocket reconnect | ✅ Yes (warning) | 5 minutes between |
+
+### 10.6 Scheduled Daily Summary
+
+The backend runs a scheduler that sends the daily performance summary at a configurable time (default: 23:00 UTC).
+
+```javascript
+// Backend: server/scheduler.js
+
+function scheduleDailySummary(bot, engine, hour = 23, minute = 0) {
+  const check = () => {
+    const now = new Date();
+    if (now.getUTCHours() === hour && now.getUTCMinutes() === minute) {
+      bot.sendDailySummary(engine.getDailyStats());
+    }
+  };
+  // Check every minute
+  setInterval(check, 60000);
+}
+```
+
+### 10.7 Message Format Reference
+
+All Telegram messages use **HTML parse mode** for formatting:
+
+| Tag | Renders As | Usage |
+|-----|-----------|-------|
+| `<b>text</b>` | **Bold** | Labels, signal type |
+| `<i>text</i>` | *Italic* | Timestamps, notes |
+| `<code>text</code>` | `Monospace` | Prices, numbers |
+| `<pre>text</pre>` | Code block | Multi-line data |
+
+### 10.8 Integration with Signal Generator
+
+The Telegram alerts hook into the Signal Generator (Module 3) at the point of signal creation:
+
+```javascript
+// Inside the live data processing loop:
+const newSignals = generateSignals(data, srLevels);
+const latestSignal = newSignals[newSignals.length - 1];
+
+if (latestSignal && latestSignal.index === data.length - 1) {
+  // This is a brand-new signal on the latest candle
+  latestSignal.pair = currentPair;
+  latestSignal.digits = PAIRS[currentPair].pip < 0.01 ? 4 : 2;
+  latestSignal.sl = latestSignal.type === "BUY"
+    ? latestSignal.price * (1 - config.stopLoss)
+    : latestSignal.price * (1 + config.stopLoss);
+  latestSignal.tp = latestSignal.type === "BUY"
+    ? latestSignal.price * (1 + config.takeProfit)
+    : latestSignal.price * (1 - config.takeProfit);
+
+  // Send to Telegram
+  await telegramBot.sendSignalAlert(latestSignal);
+
+  // Send to frontend via WebSocket
+  frontendWs.send(JSON.stringify({ type: "signal", data: latestSignal }));
+}
+```
+
+---
+
+## 13. Indicator Research & Rationale
+
+### Why Support & Resistance as Primary
+
+Support and resistance levels represent real institutional order flow — banks, hedge funds, and large traders place orders at these levels. They are the most reliable predictor of *where* price is likely to react. Unlike lagging indicators, S/R levels are forward-looking structural references.
+
+**Strengths**: High reliability at major levels, works across all timeframes and all pairs, visual and intuitive.
+
+**Weaknesses**: Levels can break (which is why we need RSI and MACD as filters).
+
+### Why RSI as Confirmation #1
+
+RSI measures whether buying or selling momentum is exhausted. When price reaches a support level AND RSI shows oversold, the probability of a bounce increases significantly — sellers are running out of steam.
+
+**Strengths**: Simple, bounded (0-100), widely used (self-fulfilling), effective at extremes.
+
+**Weaknesses**: Can stay overbought/oversold in strong trends (which is why MACD provides trend context).
+
+### Why MACD as Confirmation #2
+
+MACD confirms that the trend direction aligns with the trade. A bullish MACD crossover at a support level with oversold RSI creates the highest-probability buy setup.
+
+**Strengths**: Shows both trend direction and momentum, crossovers are clean entry triggers.
+
+**Weaknesses**: Lagging by nature (based on EMAs), can produce whipsaws in ranging markets.
+
+### Alternative Indicators Considered
+
+| Indicator | Why Not Primary |
+|-----------|----------------|
+| Bollinger Bands | Overlaps with S/R concept; adds complexity without distinct information |
+| Stochastic | Similar to RSI; using both would be redundant |
+| Fibonacci Retracement | Subjective (depends on swing selection); S/R from price pivots is more objective |
+| Ichimoku Cloud | Complex, hard to score for confluence; better as a standalone system |
+| ADX | Good for trend strength but doesn't give direction; MACD covers both |
+| Volume Profile | Requires real volume data; not available in Forex reliably |
+
+---
+
+## 14. Configuration Reference
+
+### Pair Configuration Object
+
+```javascript
+const PAIRS = {
+  "SYMBOL": {
+    price: number,       // Starting/base price
+    volatility: number,  // Per-candle price movement range
+    pip: number          // Minimum price increment (0.0001 for most FX, 0.01 for JPY/Gold)
+  }
+};
+```
+
+### Indicator Parameters
+
+| Parameter | Value | Adjustable? | Effect of Change |
+|-----------|-------|-------------|-----------------|
+| RSI Period | 14 | Yes | Lower = more sensitive, more signals. Higher = smoother, fewer signals. |
+| MACD Fast EMA | 12 | Yes | Lower = more responsive to recent moves |
+| MACD Slow EMA | 26 | Yes | Higher = smoother trend reading |
+| MACD Signal | 9 | Yes | Lower = earlier crossover signals |
+| SMA Short | 20 | Yes | Short-term trend reference |
+| SMA Long | 50 | Yes | Medium-term trend reference |
+| S/R Lookback | 20 | Yes | Higher = fewer but stronger levels |
+| S/R Cluster Threshold | 0.2% | Yes | Higher = more levels merge together |
+
+### Signal Thresholds
+
+| Parameter | Value | Effect of Change |
+|-----------|-------|-----------------|
+| Total score threshold | ±3 | Lower = more signals (looser filter). Higher = fewer, higher-quality signals. |
+| Confidence minimum | 40% | Lower = allows weaker signals through. Higher = stricter. |
+| S/R proximity | 0.3% | Lower = price must be closer to level. Higher = wider zone. |
+
+### Trade Parameters
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| Stop Loss | 0.2% | Risk per trade. 0.2% of entry price. |
+| Take Profit | 0.4% | Reward per trade. 2:1 risk-reward ratio. |
+| Lot Size | 0.1 | Mini lot (10,000 units). P&L multiplier. |
+| Starting Balance | $10,000 | Virtual account size |
+| Tick Interval | 1500ms | Live simulation update speed |
+
+### Twelve Data Parameters
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| API Base URL | `https://api.twelvedata.com` | REST API endpoint |
+| WebSocket URL | `wss://ws.twelvedata.com/v1/quotes/price` | Real-time stream endpoint |
+| Output Size | 200 | Number of candles per REST request (max 5000) |
+| Rate Limit Retry | 3 attempts | Max retries on HTTP 429 |
+| Retry Backoff | Exponential (1s, 2s, 4s) | Delay between retries |
+| WebSocket Reconnect | 10 attempts | Max auto-reconnect attempts |
+| Reconnect Backoff | Exponential (max 30s) | Delay between reconnects |
+
+### Telegram Parameters
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| Signal Cooldown | 60s | Minimum time between signal alerts |
+| Polling Interval | 2000ms | How often to check for incoming commands |
+| Daily Summary Hour | 23:00 UTC | When to send automated daily report |
+| Parse Mode | HTML | Telegram message formatting mode |
+| Reconnect Warning Cooldown | 5 min | Min time between WebSocket disconnect warnings |
+
+---
+
+## 15. Environment Variables & Secrets
+
+All sensitive credentials are stored in a `.env` file at the project root. **Never commit this file to version control.**
+
+### Required `.env` File
+
+```bash
+# ── Twelve Data API ──
+TWELVEDATA_API_KEY=your_api_key_here
+# Get from: https://twelvedata.com/account/api-keys
+# Required for: live market data, historical candles, indicator validation
+
+# ── Telegram Bot ──
+TELEGRAM_BOT_TOKEN=7123456789:AAH_your_bot_token_here
+# Get from: @BotFather on Telegram → /newbot
+# Required for: sending alerts, receiving commands
+
+TELEGRAM_CHAT_ID=123456789
+# Get from: Send message to your bot, then visit:
+# https://api.telegram.org/bot<TOKEN>/getUpdates
+# Required for: targeting alerts to your personal chat
+
+# ── Server Configuration ──
+PORT=3001
+# Port for the Node.js backend server
+
+DAILY_SUMMARY_HOUR=23
+# UTC hour to send daily performance summary via Telegram (0-23)
+
+# ── Optional ──
+NODE_ENV=production
+# "development" enables verbose logging, "production" minimizes output
+
+LOG_LEVEL=info
+# "debug" | "info" | "warn" | "error"
+```
+
+### `.env.example` Template
+
+Ship this with the project (safe to commit — no real values):
+
+```bash
+TWELVEDATA_API_KEY=
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_CHAT_ID=
+PORT=3001
+DAILY_SUMMARY_HOUR=23
+NODE_ENV=development
+LOG_LEVEL=info
+```
+
+### Loading Environment Variables
+
+```javascript
+// Backend: server/index.js
+require("dotenv").config();
+
+const config = {
+  twelveData: {
+    apiKey: process.env.TWELVEDATA_API_KEY,
+    enabled: !!process.env.TWELVEDATA_API_KEY,
+  },
+  telegram: {
+    botToken: process.env.TELEGRAM_BOT_TOKEN,
+    chatId: process.env.TELEGRAM_CHAT_ID,
+    enabled: !!(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID),
+  },
+  server: {
+    port: parseInt(process.env.PORT || "3001"),
+    dailySummaryHour: parseInt(process.env.DAILY_SUMMARY_HOUR || "23"),
+  }
+};
+
+// Validate on startup
+if (!config.twelveData.enabled) {
+  console.warn("⚠ TWELVEDATA_API_KEY not set — using simulated data");
+}
+if (!config.telegram.enabled) {
+  console.warn("⚠ Telegram credentials not set — alerts disabled");
+}
+```
+
+### Security Checklist
+
+- [ ] `.env` is listed in `.gitignore`
+- [ ] API keys have minimum required permissions
+- [ ] Telegram bot is set to private (only responds to your chat ID)
+- [ ] Server is not exposed to the public internet (runs on localhost or behind auth)
+- [ ] No API keys are hardcoded in frontend code
+- [ ] Backend proxies all API calls (frontend never touches Twelve Data or Telegram directly)
+
+---
+
+## 16. Extension Roadmap
+
+### Phase 2 — Enhanced Analysis
+
+- [ ] **Bollinger Bands overlay**: Add as optional chart overlay (not signal factor)
+- [ ] **ATR-based dynamic SL/TP**: Replace fixed percentage with ATR multiplier
+- [ ] **Multi-timeframe analysis**: Check trend on 4H before entering on 15M
+- [ ] **Candlestick pattern recognition**: Doji, engulfing, hammer at S/R levels
+- [ ] **Volume-weighted S/R**: Weight levels by volume at those prices
+
+### Phase 3 — Real Data Integration ✅ COMPLETED
+
+- [x] **Twelve Data REST API**: Historical candles with up to 5000 bars
+- [x] **Twelve Data WebSocket**: Real-time price streaming
+- [x] **Twelve Data Indicators**: Server-side RSI, MACD for cross-validation
+- [x] **Auto-fallback**: Simulated data when API unavailable
+- [ ] **Historical data caching**: Store fetched data in local database (SQLite/JSON)
+- [ ] **Multi-timeframe data**: Fetch multiple intervals simultaneously
+
+### Phase 4 — Notifications & Alerts ✅ COMPLETED
+
+- [x] **Telegram signal alerts**: BUY/SELL signals sent to phone
+- [x] **Telegram trade updates**: Open, close, SL/TP hit notifications
+- [x] **Telegram daily summary**: Automated end-of-day performance report
+- [x] **Telegram command interface**: Query bot status from phone
+- [ ] **Browser push notifications**: Alert when dashboard tab is inactive
+- [ ] **Sound alerts**: Audio notification on new signal
+- [ ] **Email digest**: Weekly performance summary via email
+
+### Phase 5 — Advanced Trading Features
+
+- [ ] **Risk management module**: Position sizing based on account % risk
+- [ ] **Correlation matrix**: Avoid correlated trades (EUR/USD + GBP/USD)
+- [ ] **News event calendar**: Warn before high-impact events (NFP, FOMC, ECB)
+- [ ] **Paper trading mode**: Full trade simulation matching broker execution
+- [ ] **Strategy comparison**: Run multiple strategies side-by-side in backtest
+- [ ] **Trailing stop-loss**: Dynamic SL that follows price in profitable direction
+- [ ] **Partial close**: Take partial profit at TP1, let remainder run to TP2
+
+### Phase 6 — AI Enhancement
+
+- [ ] **Claude API integration**: Ask Claude to analyze chart patterns in natural language
+- [ ] **Sentiment analysis**: Feed news headlines through Claude for sentiment scoring
+- [ ] **Adaptive parameters**: Use ML to optimize indicator parameters per pair
+- [ ] **Trade journal with AI review**: Claude reviews your trades and suggests improvements
+- [ ] **Natural language queries via Telegram**: "How is EUR/USD looking?" → Claude analyzes and replies
+
+---
+
+## 17. Prompt for Claude Code
+
+Copy and paste the following into a new Claude Code session to rebuild or extend the bot:
+
+---
+
+**Prompt:**
+
+> I want to build (or extend) a personal Forex & Commodities trading signal bot called NEXUS. Here is the complete blueprint — follow it exactly for architecture, indicator logic, and module structure:
+>
+> [Paste this entire document or attach it as a file]
+>
+> The system has two parts:
+> 1. **Frontend** — a React (JSX) dashboard using Recharts for charts
+> 2. **Backend** — a Node.js server that handles Twelve Data API connections, Telegram bot, and serves data to the frontend
+>
+> The core strategy is a confluence-based system using Support & Resistance (primary), RSI (14), and MACD (12, 26, 9). A signal only fires when all three agree (total score ≥ 3 for BUY, ≤ -3 for SELL).
+>
+> Key modules:
+> 1. Market Data Engine — Twelve Data REST API for historical candles, WebSocket for live prices, auto-fallback to simulated data
+> 2. Technical Analysis Core — calculates SMA, EMA, RSI, MACD, S/R levels
+> 3. Signal Generator — confluence scoring system
+> 4. Virtual Trading Engine — execute BUY/SELL with auto SL/TP
+> 5. Backtesting Engine — same signal logic on 500 candles of history
+> 6. Charting — price + S/R overlay, RSI with zones, MACD with histogram, volume
+> 7. Reporting — portfolio overview, win/loss chart, trade history, performance metrics
+> 8. UI Shell — tab navigation, header bar, pair/timeframe selectors
+> 9. Twelve Data Integration — REST client, WebSocket streaming, candle aggregation, rate limiting, error handling with fallback
+> 10. Telegram Bot — signal alerts, trade updates, daily summaries, command interface (/status, /signals, /positions, /performance, /market, /daily)
+>
+> **Environment**: The backend needs `TWELVEDATA_API_KEY`, `TELEGRAM_BOT_TOKEN`, and `TELEGRAM_CHAT_ID` in a `.env` file.
+>
+> **Current task**: [describe what you want to build, modify, or add]
+
+---
+
+### Tips for Effective Claude Code Sessions
+
+1. **Always attach this blueprint** as context — it ensures consistency across sessions
+2. **Reference modules by name**: "Modify Module 3 (Signal Generator) to add Bollinger Band scoring"
+3. **Be specific about changes**: "Add an ATR calculation to Module 2, then use it in Module 4 to set dynamic SL at 1.5× ATR"
+4. **Ask for backtest validation**: After any signal logic change, ask Claude to verify the backtest still uses the same logic
+5. **Backend vs frontend**: Specify which part you're modifying — "Add a /pnl command to the Telegram Command Handler in Module 10"
+6. **API key safety**: Never paste real API keys in the conversation — use `.env` references only
+7. **Test incrementally**: When adding a new integration (e.g., new data source), ask Claude to add the fallback logic first, then the real connection
+
+### Project File Structure
+
+When building with Claude Code, the project should follow this structure:
+
+```
+nexus-trading-bot/
+├── .env                        # API keys (never commit)
+├── .env.example                # Template (safe to commit)
+├── .gitignore
+├── package.json
+├── README.md
+│
+├── server/                     # Node.js backend
+│   ├── index.js                # Express server entry point
+│   ├── twelvedata.js           # Twelve Data REST client
+│   ├── websocket-client.js     # Twelve Data WebSocket stream
+│   ├── candle-aggregator.js    # Tick-to-candle conversion
+│   ├── telegram.js             # Telegram bot (send messages)
+│   ├── telegram-commands.js    # Telegram command handler
+│   ├── scheduler.js            # Daily summary cron
+│   ├── signal-engine.js        # Signal generator (server-side)
+│   ├── trade-manager.js        # Virtual trade state management
+│   └── indicators.js           # TA calculations (SMA, EMA, RSI, MACD, S/R)
+│
+├── frontend/                   # React frontend
+│   ├── trading-bot.jsx         # Main single-file React app
+│   └── index.html              # Entry point
+│
+└── data/                       # Local storage (optional)
+    ├── trades.json             # Persisted trade history
+    └── cache/                  # Cached Twelve Data responses
+```
+
+---
+
+## ENHANCEMENTS version2.1
+### Telegram Remote Trading Control
+- [ ] elegram Remote Trading Control
+You can now **execute trades directly from Telegram** without opening the dashboard. This means you can manage your trading from anywhere using just your phone.
+
+**New Telegram commands:**
+- `/buy [PAIR] [LOTSIZE]` — Open a BUY position (e.g., `/buy EUR/USD 0.1`)
+- `/sell [PAIR] [LOTSIZE]` — Open a SELL position (e.g., `/sell GBP/USD 0.1`)
+- `/close [ID]` — Close a specific position by ID (e.g., `/close 1707412345678`)
+- `/closeall [PAIR]` — Close all positions for a pair (e.g., `/closeall EUR/USD`)
+- `/closetype [BUY|SELL] [PAIR]` — Close all BUY or SELL positions for a pair
+- `/list` — List all open positions with IDs and live P&L
+- `/price [PAIR]` — Get current market price for a pair
+
+**New features:**
+- Interactive inline keyboard buttons on signal alerts (tap to execute immediately)
+- Confirmation messages with trade details after execution
+- Live P&L updates via `/list` command
+- Support for partial lot sizes (0.01 - 1.0)
+- Position ID tracking for precise close operations
+- Safety validations (pair exists, sufficient balance, position ownership)
+
+*End of Blueprint*
