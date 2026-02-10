@@ -387,7 +387,7 @@ function TradeTab({ data, signals, openPositions, balance, pair, onTrade, onClos
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
               <thead>
                 <tr style={{ borderBottom: `1px solid ${C.panelBorder}` }}>
-                  {["Type", "Pair", "Entry", "Current", "SL", "TP", "P&L", ""].map(h => (
+                  {["Type", "Pair", "Lot", "Entry", "Current", "SL", "TP", "P&L", ""].map(h => (
                     <th key={h} style={{ padding: "8px 6px", textAlign: "left", color: C.textMuted, fontWeight: 600 }}>{h}</th>
                   ))}
                 </tr>
@@ -397,6 +397,7 @@ function TradeTab({ data, signals, openPositions, balance, pair, onTrade, onClos
                   <tr key={pos.id} style={{ borderBottom: `1px solid ${C.panelBorder}` }}>
                     <td style={{ padding: "8px 6px", color: pos.type === "BUY" ? C.buy : C.sell, fontWeight: 600 }}>{pos.type}</td>
                     <td style={{ padding: "8px 6px" }}>{pos.pair}</td>
+                    <td style={{ padding: "8px 6px" }}>{pos.lotSize}</td>
                     <td style={{ padding: "8px 6px" }}>{pos.entry.toFixed(pos.digits)}</td>
                     <td style={{ padding: "8px 6px" }}>{pos.currentPrice.toFixed(pos.digits)}</td>
                     <td style={{ padding: "8px 6px", color: C.sell }}>{pos.sl.toFixed(pos.digits)}</td>
@@ -669,14 +670,14 @@ function ReportsTab({ balance, tradeLog, stats }) {
 // MAIN APP
 // ══════════════════════════════════════════
 function App() {
-  // State
-  const [pair, setPair] = useState("EUR/USD");
-  const [timeframe, setTimeframe] = useState("15min");
+  // State (with localStorage persistence for pair and isLive)
+  const [pair, setPair] = useState(() => localStorage.getItem("nexus_pair") || "EUR/USD");
+  const [timeframe, setTimeframe] = useState(() => localStorage.getItem("nexus_timeframe") || "15min");
   const [tab, setTab] = useState("dashboard");
   const [data, setData] = useState([]);
   const [srLevels, setSrLevels] = useState([]);
   const [signals, setSignals] = useState([]);
-  const [isLive, setIsLive] = useState(false);
+  const [isLive, setIsLive] = useState(() => localStorage.getItem("nexus_isLive") === "true");
   const [dataSource, setDataSource] = useState("simulated");
   const [balance, setBalance] = useState(10000);
   const [openPositions, setOpenPositions] = useState([]);
@@ -688,6 +689,21 @@ function App() {
   });
 
   const wsRef = useRef(null);
+
+  // Persist pair to localStorage
+  useEffect(() => {
+    localStorage.setItem("nexus_pair", pair);
+  }, [pair]);
+
+  // Persist timeframe to localStorage
+  useEffect(() => {
+    localStorage.setItem("nexus_timeframe", timeframe);
+  }, [timeframe]);
+
+  // Persist isLive to localStorage
+  useEffect(() => {
+    localStorage.setItem("nexus_isLive", isLive.toString());
+  }, [isLive]);
 
   // Fetch data
   const fetchData = useCallback(async () => {
@@ -722,6 +738,19 @@ function App() {
     fetchData();
     fetchPositions();
   }, [fetchData, fetchPositions]);
+
+  // Auto-restart live mode if it was active before page refresh
+  useEffect(() => {
+    if (isLive) {
+      // Start live mode with saved pair and timeframe
+      fetch(`${API}/live/start`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pair, timeframe }),
+      }).catch(err => console.error("Auto-restart live mode failed:", err));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Run once on mount only
 
   // WebSocket for live updates
   useEffect(() => {

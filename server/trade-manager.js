@@ -16,6 +16,13 @@ function getDigits(pair) {
   return config.digits !== undefined ? config.digits : (config.pip < 0.01 ? 4 : 2);
 }
 
+function getContractSize(pair) {
+  // XAU/USD (Gold) uses 100 oz per lot
+  // All Forex pairs use 100,000 units per lot
+  if (pair === "XAU/USD") return 100;
+  return 100000;
+}
+
 class TradeManager {
   constructor(startingBalance = 10000) {
     this.startingBalance = startingBalance;
@@ -86,14 +93,15 @@ class TradeManager {
       pos.currentPrice = priceForPos;
 
       // Calculate P&L for ALL positions
+      const contractSize = getContractSize(pos.pair);
       if (pos.type === "BUY") {
         pos.pnl =
-          (priceForPos - pos.entry) * pos.lotSize * 100000;
+          (priceForPos - pos.entry) * pos.lotSize * contractSize;
         pos.pnlPct =
           ((priceForPos - pos.entry) / pos.entry) * 100;
       } else {
         pos.pnl =
-          (pos.entry - priceForPos) * pos.lotSize * 100000;
+          (pos.entry - priceForPos) * pos.lotSize * contractSize;
         pos.pnlPct =
           ((pos.entry - priceForPos) / pos.entry) * 100;
       }
@@ -145,11 +153,12 @@ class TradeManager {
    */
   _closePosition(pos, exitPrice, exitReason) {
     let pnl, pnlPct;
+    const contractSize = getContractSize(pos.pair);
     if (pos.type === "BUY") {
-      pnl = (exitPrice - pos.entry) * pos.lotSize * 100000;
+      pnl = (exitPrice - pos.entry) * pos.lotSize * contractSize;
       pnlPct = ((exitPrice - pos.entry) / pos.entry) * 100;
     } else {
-      pnl = (pos.entry - exitPrice) * pos.lotSize * 100000;
+      pnl = (pos.entry - exitPrice) * pos.lotSize * contractSize;
       pnlPct = ((pos.entry - exitPrice) / pos.entry) * 100;
     }
 
@@ -249,7 +258,7 @@ class TradeManager {
     }
     const lines = this.openPositions.map((p) => {
       const pnlStr = p.pnl >= 0 ? `+$${p.pnl.toFixed(2)}` : `-$${Math.abs(p.pnl).toFixed(2)}`;
-      return `${p.type} ${p.pair} @ ${p.entry.toFixed(p.digits)} | P&L: ${pnlStr} (${p.pnlPct.toFixed(2)}%)`;
+      return `${p.type} ${p.pair} @ ${p.entry.toFixed(p.digits)} | Lot: ${p.lotSize} | P&L: ${pnlStr} (${p.pnlPct.toFixed(2)}%)`;
     });
     return [`<b>OPEN POSITIONS</b>`, ``, ...lines].join("\n");
   }
@@ -299,4 +308,4 @@ class TradeManager {
   }
 }
 
-module.exports = { TradeManager, PAIRS, getDigits };
+module.exports = { TradeManager, PAIRS, getDigits, getContractSize };
