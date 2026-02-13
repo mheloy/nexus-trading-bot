@@ -25,7 +25,17 @@
       "Bash(bash -c 'export NVM_DIR=\"\"$HOME/.nvm\"\" && . \"\"$NVM_DIR/nvm.sh\"\" && lsof -i :3001 -t')",
       "Bash(ps:*)",
       "Bash(kill:*)",
-      "Bash(lsof:*)"
+      "Bash(lsof:*)",
+      "Bash(xargs:*)",
+      "Bash(npm start)",
+      "Bash(npm run frontend:*)",
+      "Bash(python3:*)",
+      "Bash(journalctl:*)",
+      "Bash(dmesg:*)",
+      "Bash(jq:*)",
+      "Bash(pkill:*)",
+      "Bash(npm run build:*)",
+      "Bash(nvm use:*)"
     ]
   }
 }

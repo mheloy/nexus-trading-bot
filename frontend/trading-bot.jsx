@@ -112,7 +112,7 @@ function Btn({ children, onClick, color = C.accent, disabled, small, style: s })
 // ══════════════════════════════════════════
 // TAB: Dashboard
 // ══════════════════════════════════════════
-function DashboardTab({ data, srLevels, signals, balance, openPositions, dataSource, isLive, pair }) {
+function DashboardTab({ data, srLevels, signals, balance, openPositions, dataSource, mode, pair }) {
   const latest = data[data.length - 1];
   const prev = data[data.length - 2];
   const priceChange = latest && prev ? latest.close - prev.close : 0;
@@ -573,10 +573,10 @@ function ReportsTab({ balance, tradeLog, stats }) {
       {/* Portfolio Overview */}
       <Panel title="Portfolio Overview" span={2}>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 8 }}>
-          <StatCard label="Starting Balance" value="$10,000.00" />
+          <StatCard label="Starting Balance" value={`$${(stats.startBalance || 10000).toFixed(2)}`} />
           <StatCard label="Current Balance" value={`$${balance.toFixed(2)}`} color={C.accent} />
-          <StatCard label="Net P&L" value={`${stats.totalPnl >= 0 ? "+" : ""}$${stats.totalPnl.toFixed(2)}`} color={stats.totalPnl >= 0 ? C.buy : C.sell} />
-          <StatCard label="Return %" value={`${(((balance - 10000) / 10000) * 100).toFixed(2)}%`} color={balance >= 10000 ? C.buy : C.sell} />
+          <StatCard label="Net P&L" value={`${(stats.totalPnl || 0) >= 0 ? "+" : ""}$${(stats.totalPnl || 0).toFixed(2)}`} color={(stats.totalPnl || 0) >= 0 ? C.buy : C.sell} />
+          <StatCard label="Return %" value={`${(((balance - (stats.startBalance || 10000)) / (stats.startBalance || 10000)) * 100).toFixed(2)}%`} color={balance >= (stats.startBalance || 10000) ? C.buy : C.sell} />
           <StatCard label="Open Exposure" value={stats.openPositions} />
         </div>
       </Panel>
@@ -588,10 +588,10 @@ function ReportsTab({ balance, tradeLog, stats }) {
             ["Total Trades", stats.totalTrades],
             ["Wins", stats.wins, C.buy],
             ["Losses", stats.losses, C.sell],
-            ["Win Rate", `${stats.winRate.toFixed(1)}%`, stats.winRate >= 50 ? C.buy : C.sell],
-            ["Best Trade", `+$${stats.bestTrade.toFixed(2)}`, C.buy],
-            ["Worst Trade", `$${stats.worstTrade.toFixed(2)}`, C.sell],
-            ["Profit Factor", stats.profitFactor === Infinity ? "INF" : stats.profitFactor.toFixed(2)],
+            ["Win Rate", `${(stats.winRate || 0).toFixed(1)}%`, stats.winRate >= 50 ? C.buy : C.sell],
+            ["Best Trade", `+$${(stats.bestTrade || 0).toFixed(2)}`, C.buy],
+            ["Worst Trade", `$${(stats.worstTrade || 0).toFixed(2)}`, C.sell],
+            ["Profit Factor", !stats.profitFactor || stats.profitFactor === Infinity ? "∞" : stats.profitFactor.toFixed(2)],
           ].map(([label, value, color]) => (
             <div key={label} style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", fontSize: 13 }}>
               <span style={{ color: C.textMuted }}>{label}</span>
@@ -667,21 +667,174 @@ function ReportsTab({ balance, tradeLog, stats }) {
 }
 
 // ══════════════════════════════════════════
+// TAB: Settings
+// ══════════════════════════════════════════
+function SettingsTab() {
+  const [config, setConfig] = useState({
+    startingBalance: 10000,
+    lotSize: 0.1,
+    stopLossPips: 150,
+    takeProfitPips: 300,
+    trailingStopDistance: 150,
+    trailingStopActivation: 100,
+  });
+  const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState(null);
+
+  // Load config on mount
+  useEffect(() => {
+    fetch(`${API}/config`)
+      .then(r => r.json())
+      .then(data => setConfig(data))
+      .catch(err => console.error("Failed to load config:", err));
+  }, []);
+
+  const saveConfig = async () => {
+    setLoading(true);
+    setMessage(null);
+    try {
+      const resp = await fetch(`${API}/config`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(config),
+      });
+      const result = await resp.json();
+
+      if (!resp.ok) {
+        // Handle validation errors from backend
+        setMessage({ type: "error", text: result.error || `Server error: ${resp.status}` });
+      } else {
+        setMessage({ type: "success", text: "Configuration saved! Changes applied immediately and will persist across restarts." });
+      }
+    } catch (err) {
+      setMessage({ type: "error", text: `Failed to save: ${err.message}` });
+    }
+    setLoading(false);
+  };
+
+  const handleReset = async () => {
+    if (!confirm("Are you sure you want to reset? This will:\n• Close all open positions\n• Clear all trade history\n• Reset balance to starting balance\n\nThis action cannot be undone!")) {
+      return;
+    }
+
+    setLoading(true);
+    setMessage(null);
+    try {
+      const resp = await fetch(`${API}/reset`, { method: "POST" });
+      const result = await resp.json();
+
+      if (!resp.ok) {
+        setMessage({ type: "error", text: result.error || `Server error: ${resp.status}` });
+      } else {
+        setMessage({ type: "success", text: result.message || "Trading state reset successfully!" });
+      }
+    } catch (err) {
+      setMessage({ type: "error", text: `Failed to reset: ${err.message}` });
+    }
+    setLoading(false);
+  };
+
+  return (
+    <div style={{ maxWidth: 600 }}>
+      <Panel title="Trading Configuration" span={1}>
+        <div style={{ fontSize: 13, color: C.textMuted, marginBottom: 16 }}>
+          These parameters control auto-execution in SIMULATION mode. Changes apply immediately and persist across restarts.
+        </div>
+
+        {[
+          { label: "Starting Balance ($)", key: "startingBalance", min: 100, max: 1000000, step: 100, desc: "Initial account balance (requires reset to apply)" },
+          { label: "Lot Size", key: "lotSize", min: 0.01, max: 1, step: 0.01, desc: "Position size per trade" },
+          { label: "Stop Loss (pips)", key: "stopLossPips", min: 10, max: 3000, step: 10, desc: "Initial stop loss distance" },
+          { label: "Take Profit (pips)", key: "takeProfitPips", min: 10, max: 5000, step: 10, desc: "Target profit distance" },
+          { label: "Trailing Distance (pips)", key: "trailingStopDistance", min: 10, max: 3000, step: 10, desc: "Trailing stop distance from peak" },
+          { label: "Trailing Activation (pips)", key: "trailingStopActivation", min: 10, max: 3000, step: 10, desc: "Profit threshold to activate trailing" },
+        ].map(({ label, key, min, max, step, desc }) => (
+          <div key={key} style={{ marginBottom: 16 }}>
+            <label style={{ fontSize: 12, fontWeight: 600, display: "block", marginBottom: 4 }}>{label}</label>
+            <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 6 }}>{desc}</div>
+            <input
+              type="number"
+              min={min}
+              max={max}
+              step={step}
+              value={config[key]}
+              onChange={e => setConfig(prev => ({ ...prev, [key]: parseFloat(e.target.value) }))}
+              style={{
+                width: "100%",
+                padding: "8px 12px",
+                background: C.bg,
+                border: `1px solid ${C.panelBorder}`,
+                borderRadius: 6,
+                color: C.text,
+                fontSize: 14,
+                outline: "none",
+              }}
+            />
+          </div>
+        ))}
+
+        {message && (
+          <div style={{
+            padding: "12px",
+            borderRadius: 6,
+            marginBottom: 16,
+            background: message.type === "success" ? `${C.buy}20` : `${C.sell}20`,
+            color: message.type === "success" ? C.buy : C.sell,
+            border: `1px solid ${message.type === "success" ? C.buy : C.sell}`,
+            fontSize: 13,
+          }}>
+            {message.text}
+          </div>
+        )}
+
+        <Btn onClick={saveConfig} disabled={loading} style={{ width: "100%" }}>
+          {loading ? "Saving..." : "Save Configuration"}
+        </Btn>
+
+        <div style={{ marginTop: 16, paddingTop: 16, borderTop: `1px solid ${C.panelBorder}` }}>
+          <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8, color: C.sell }}>Danger Zone</div>
+          <Btn
+            onClick={handleReset}
+            disabled={loading}
+            style={{
+              width: "100%",
+              background: `${C.sell}20`,
+              color: C.sell,
+              border: `1px solid ${C.sell}`
+            }}
+          >
+            {loading ? "Resetting..." : "Reset All Trades & Balance"}
+          </Btn>
+          <div style={{ fontSize: 11, color: C.textMuted, marginTop: 8, fontStyle: "italic" }}>
+            ⚠️ This will close all positions, clear trade history, and reset balance. Cannot be undone!
+          </div>
+        </div>
+
+        <div style={{ fontSize: 11, color: C.textMuted, marginTop: 12, fontStyle: "italic" }}>
+          Note: Configuration is saved to .env file. Changes apply immediately to new trades and persist across restarts.
+        </div>
+      </Panel>
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════
 // MAIN APP
 // ══════════════════════════════════════════
 function App() {
-  // State (with localStorage persistence for pair and isLive)
+  // State (with localStorage persistence for pair and mode)
   const [pair, setPair] = useState(() => localStorage.getItem("nexus_pair") || "EUR/USD");
   const [timeframe, setTimeframe] = useState(() => localStorage.getItem("nexus_timeframe") || "15min");
   const [tab, setTab] = useState("dashboard");
   const [data, setData] = useState([]);
   const [srLevels, setSrLevels] = useState([]);
   const [signals, setSignals] = useState([]);
-  const [isLive, setIsLive] = useState(() => localStorage.getItem("nexus_isLive") === "true");
+  const [mode, setMode] = useState(() => localStorage.getItem("nexus_mode") || "STOP");
   const [dataSource, setDataSource] = useState("simulated");
   const [balance, setBalance] = useState(10000);
   const [openPositions, setOpenPositions] = useState([]);
   const [tradeLog, setTradeLog] = useState([]);
+  const [marketStatus, setMarketStatus] = useState({ open: true, weekend: false, activeSessions: [] });
   const [stats, setStats] = useState({
     totalTrades: 0, wins: 0, losses: 0, winRate: 0,
     totalPnl: 0, bestTrade: 0, worstTrade: 0, profitFactor: 0,
@@ -700,10 +853,10 @@ function App() {
     localStorage.setItem("nexus_timeframe", timeframe);
   }, [timeframe]);
 
-  // Persist isLive to localStorage
+  // Persist mode to localStorage
   useEffect(() => {
-    localStorage.setItem("nexus_isLive", isLive.toString());
-  }, [isLive]);
+    localStorage.setItem("nexus_mode", mode);
+  }, [mode]);
 
   // Fetch data
   const fetchData = useCallback(async () => {
@@ -739,22 +892,71 @@ function App() {
     fetchPositions();
   }, [fetchData, fetchPositions]);
 
-  // Auto-restart live mode if it was active before page refresh
+  // Sync frontend state with backend on mount
   useEffect(() => {
-    if (isLive) {
-      // Start live mode with saved pair and timeframe
-      fetch(`${API}/live/start`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pair, timeframe }),
-      }).catch(err => console.error("Auto-restart live mode failed:", err));
-    }
+    fetch(`${API}/status`)
+      .then(r => r.json())
+      .then(status => {
+        // Sync pair from backend
+        if (status.pair && status.pair !== pair) {
+          console.log(`🔄 Syncing pair: localStorage=${pair} → backend=${status.pair}`);
+          setPair(status.pair);
+          localStorage.setItem("nexus_pair", status.pair);
+        }
+
+        // Sync timeframe from backend
+        if (status.timeframe && status.timeframe !== timeframe) {
+          console.log(`🔄 Syncing timeframe: localStorage=${timeframe} → backend=${status.timeframe}`);
+          setTimeframe(status.timeframe);
+          localStorage.setItem("nexus_timeframe", status.timeframe);
+        }
+
+        // Sync mode from backend
+        if (status.mode !== mode) {
+          console.log(`🔄 Syncing mode: localStorage=${mode} → backend=${status.mode}`);
+          setMode(status.mode);
+          localStorage.setItem("nexus_mode", status.mode);
+        }
+
+        // Update market status
+        if (status.marketHours) {
+          setMarketStatus(status.marketHours);
+        }
+
+        // If mode is SIMULATION but backend says STOP, restart it
+        const localMode = localStorage.getItem("nexus_mode");
+        if (localMode === "SIMULATION" && status.mode === "STOP") {
+          console.log("🔄 Auto-restarting SIMULATION mode from localStorage");
+          fetch(`${API}/mode/start`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ pair: status.pair || pair, timeframe: status.timeframe || timeframe, mode: "SIMULATION" }),
+          })
+            .then(() => setMode("SIMULATION"))
+            .catch(err => console.error("Auto-restart failed:", err));
+        }
+      })
+      .catch(err => console.error("Failed to sync state:", err));
+
+    // Refresh market status every 60 seconds
+    const statusInterval = setInterval(() => {
+      fetch(`${API}/status`)
+        .then(r => r.json())
+        .then(status => {
+          if (status.marketHours) {
+            setMarketStatus(status.marketHours);
+          }
+        })
+        .catch(err => console.error("Failed to refresh market status:", err));
+    }, 60000);
+
+    return () => clearInterval(statusInterval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // Run once on mount only
 
   // WebSocket for live updates
   useEffect(() => {
-    if (!isLive) return;
+    if (mode === "STOP") return;
 
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     const ws = new WebSocket(`${protocol}//${window.location.host}/api/live`);
@@ -803,27 +1005,31 @@ function App() {
     ws.onclose = () => console.log("WebSocket closed");
 
     return () => ws.close();
-  }, [isLive, fetchPositions]);
+  }, [mode, fetchPositions]);
 
-  // Periodic position refresh (every 10s when live)
+  // Periodic position refresh (every 10s when monitoring active)
   useEffect(() => {
-    if (!isLive) return;
+    if (mode === "STOP") return;
     const interval = setInterval(fetchPositions, 10000);
     return () => clearInterval(interval);
-  }, [isLive, fetchPositions]);
+  }, [mode, fetchPositions]);
 
-  // Toggle live
-  const toggleLive = async () => {
-    if (isLive) {
-      await fetch(`${API}/live/stop`, { method: "POST" });
-      setIsLive(false);
-    } else {
-      await fetch(`${API}/live/start`, {
+  // Handle mode change
+  const handleModeChange = async (newMode) => {
+    if (newMode === mode) return;
+
+    if (newMode === "STOP") {
+      // Stop monitoring
+      await fetch(`${API}/mode/stop`, { method: "POST" });
+      setMode("STOP");
+    } else if (newMode === "SIMULATION") {
+      // Start simulation mode
+      await fetch(`${API}/mode/start`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pair, timeframe }),
+        body: JSON.stringify({ pair, timeframe, mode: "SIMULATION" }),
       });
-      setIsLive(true);
+      setMode("SIMULATION");
     }
   };
 
@@ -873,6 +1079,7 @@ function App() {
     { key: "trade", label: "Virtual Trade" },
     { key: "backtest", label: "Backtest" },
     { key: "reports", label: "Reports" },
+    { key: "settings", label: "Settings" },
   ];
 
   return (
@@ -896,8 +1103,8 @@ function App() {
             onChange={e => {
               const newPair = e.target.value;
               setPair(newPair);
-              if (isLive) {
-                fetch(`${API}/live/switch`, {
+              if (mode !== "STOP") {
+                fetch(`${API}/mode/switch`, {
                   method: "POST",
                   headers: { "Content-Type": "application/json" },
                   body: JSON.stringify({ pair: newPair, timeframe }),
@@ -926,8 +1133,8 @@ function App() {
                 key={tf.value}
                 onClick={() => {
                   setTimeframe(tf.value);
-                  if (isLive) {
-                    fetch(`${API}/live/switch`, {
+                  if (mode !== "STOP") {
+                    fetch(`${API}/mode/switch`, {
                       method: "POST",
                       headers: { "Content-Type": "application/json" },
                       body: JSON.stringify({ pair, timeframe: tf.value }),
@@ -950,14 +1157,46 @@ function App() {
             ))}
           </div>
 
-          {/* Live Toggle */}
-          <Btn
-            color={isLive ? C.sell : C.buy}
-            onClick={toggleLive}
-            small
-          >
-            {isLive ? "STOP" : "LIVE"}
-          </Btn>
+          {/* Mode Selector - 3 buttons */}
+          <div style={{ display: "flex", gap: 4, border: `1px solid ${C.panelBorder}`, borderRadius: 6, padding: 2 }}>
+            {[
+              { key: "STOP", label: "STOP", color: C.textMuted },
+              { key: "SIMULATION", label: "SIM", color: C.gold },
+              { key: "LIVE", label: "LIVE", color: C.buy, disabled: true },
+            ].map(m => (
+              <button
+                key={m.key}
+                disabled={m.disabled}
+                onClick={() => handleModeChange(m.key)}
+                style={{
+                  padding: "6px 12px",
+                  fontSize: 11,
+                  fontWeight: 600,
+                  background: mode === m.key ? m.color : "transparent",
+                  color: mode === m.key ? (m.key === "SIMULATION" ? "#000" : "#fff") : (m.disabled ? C.textMuted : C.text),
+                  border: "none",
+                  borderRadius: 4,
+                  cursor: m.disabled ? "not-allowed" : "pointer",
+                  opacity: m.disabled ? 0.5 : 1,
+                }}
+              >{m.label}</button>
+            ))}
+          </div>
+
+          {/* AUTO-EXEC Badge */}
+          {mode === "SIMULATION" && (
+            <div style={{
+              padding: "4px 8px",
+              borderRadius: 4,
+              fontSize: 10,
+              fontWeight: 700,
+              background: `${C.gold}20`,
+              color: C.gold,
+              border: `1px solid ${C.gold}`,
+            }}>
+              AUTO-EXEC
+            </div>
+          )}
         </div>
 
         <div style={{ display: "flex", alignItems: "center", gap: 20 }}>
@@ -990,13 +1229,34 @@ function App() {
             {dataSource === "twelvedata" ? "LIVE" : "SIM"}
           </div>
 
-          {/* Live Indicator */}
-          {isLive && (
+          {/* Market Status Badge */}
+          <div
+            style={{
+              padding: "4px 10px",
+              borderRadius: 12,
+              fontSize: 10,
+              fontWeight: 700,
+              background: marketStatus.open ? `${C.buy}20` : `${C.sell}20`,
+              color: marketStatus.open ? C.buy : C.sell,
+              border: `1px solid ${marketStatus.open ? C.buy : C.sell}`,
+              cursor: "pointer",
+            }}
+            title={marketStatus.open
+              ? `Markets Open: ${marketStatus.activeSessions.join(", ")}`
+              : marketStatus.weekend
+                ? "Markets Closed: Weekend"
+                : "Markets Closed: Between Sessions"}
+          >
+            {marketStatus.open ? "🟢 OPEN" : marketStatus.weekend ? "🔴 WEEKEND" : "🟡 CLOSED"}
+          </div>
+
+          {/* Active Mode Indicator */}
+          {mode !== "STOP" && (
             <div style={{
               width: 8,
               height: 8,
               borderRadius: "50%",
-              background: C.sell,
+              background: mode === "SIMULATION" ? C.gold : C.sell,
               animation: "pulse 1.5s infinite",
             }} />
           )}
@@ -1040,7 +1300,7 @@ function App() {
             balance={balance}
             openPositions={openPositions}
             dataSource={dataSource}
-            isLive={isLive}
+            mode={mode}
             pair={pair}
           />
         )}
@@ -1064,6 +1324,7 @@ function App() {
         {tab === "reports" && (
           <ReportsTab balance={balance} tradeLog={tradeLog} stats={stats} />
         )}
+        {tab === "settings" && <SettingsTab />}
       </div>
 
       {/* Global Styles */}

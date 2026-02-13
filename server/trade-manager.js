@@ -23,6 +23,16 @@ function getContractSize(pair) {
   return 100000;
 }
 
+function pipsToPrice(pair, pips) {
+  const pipSize = PAIRS[pair]?.pip || 0.0001;
+  return pips * pipSize;
+}
+
+function priceToPips(pair, priceDistance) {
+  const pipSize = PAIRS[pair]?.pip || 0.0001;
+  return priceDistance / pipSize;
+}
+
 class TradeManager {
   constructor(startingBalance = 10000) {
     this.startingBalance = startingBalance;
@@ -38,14 +48,16 @@ class TradeManager {
    */
   openTrade(type, pair, price, config = {}) {
     const lotSize = config.lotSize || 0.1;
-    const slPct = config.stopLoss || 0.002;
-    const tpPct = config.takeProfit || 0.004;
+    const slPips = config.stopLossPips || 150;
+    const tpPips = config.takeProfitPips || 300;
     const digits = getDigits(pair);
 
-    const sl =
-      type === "BUY" ? price * (1 - slPct) : price * (1 + slPct);
-    const tp =
-      type === "BUY" ? price * (1 + tpPct) : price * (1 - tpPct);
+    // Convert pips to price distance
+    const slDistance = pipsToPrice(pair, slPips);
+    const tpDistance = pipsToPrice(pair, tpPips);
+
+    const sl = type === "BUY" ? price - slDistance : price + slDistance;
+    const tp = type === "BUY" ? price + tpDistance : price - tpDistance;
 
     const position = {
       id: this.nextId++,
@@ -64,6 +76,12 @@ class TradeManager {
       pnl: 0,
       pnlPct: 0,
       digits,
+      // New trailing stop fields
+      trailingStopDistancePips: config.trailingStopDistance || null,
+      trailingStopActivationPips: config.trailingStopActivation || null,
+      trailingActive: false,
+      highestPrice: price, // For BUY positions
+      lowestPrice: price,  // For SELL positions
     };
 
     this.openPositions.push(position);
@@ -104,6 +122,54 @@ class TradeManager {
           (pos.entry - priceForPos) * pos.lotSize * contractSize;
         pos.pnlPct =
           ((pos.entry - priceForPos) / pos.entry) * 100;
+      }
+
+      // === TRAILING STOP LOGIC ===
+      if (pos.trailingStopDistancePips && pos.trailingStopActivationPips) {
+        const activationDistance = pipsToPrice(pos.pair, pos.trailingStopActivationPips);
+        const trailDistance = pipsToPrice(pos.pair, pos.trailingStopDistancePips);
+
+        if (pos.type === "BUY") {
+          // Track highest price
+          if (priceForPos > pos.highestPrice) {
+            pos.highestPrice = priceForPos;
+          }
+
+          // Check if trailing should activate
+          const profitDistance = pos.highestPrice - pos.entry;
+          if (!pos.trailingActive && profitDistance >= activationDistance) {
+            pos.trailingActive = true;
+            console.log(`✅ Trailing stop activated for BUY ${pos.pair} #${pos.id} at ${pos.highestPrice.toFixed(pos.digits)}`);
+          }
+
+          // If active, update SL to follow price
+          if (pos.trailingActive) {
+            const newSL = pos.highestPrice - trailDistance;
+            if (newSL > pos.sl) {
+              pos.sl = newSL;
+            }
+          }
+        } else { // SELL
+          // Track lowest price
+          if (priceForPos < pos.lowestPrice) {
+            pos.lowestPrice = priceForPos;
+          }
+
+          // Check if trailing should activate
+          const profitDistance = pos.entry - pos.lowestPrice;
+          if (!pos.trailingActive && profitDistance >= activationDistance) {
+            pos.trailingActive = true;
+            console.log(`✅ Trailing stop activated for SELL ${pos.pair} #${pos.id} at ${pos.lowestPrice.toFixed(pos.digits)}`);
+          }
+
+          // If active, update SL to follow price
+          if (pos.trailingActive) {
+            const newSL = pos.lowestPrice + trailDistance;
+            if (newSL < pos.sl) {
+              pos.sl = newSL;
+            }
+          }
+        }
       }
 
       // Only check SL/TP for positions matching the incoming tick's pair
@@ -258,7 +324,12 @@ class TradeManager {
     }
     const lines = this.openPositions.map((p) => {
       const pnlStr = p.pnl >= 0 ? `+$${p.pnl.toFixed(2)}` : `-$${Math.abs(p.pnl).toFixed(2)}`;
-      return `${p.type} ${p.pair} @ ${p.entry.toFixed(p.digits)} | Lot: ${p.lotSize} | P&L: ${pnlStr} (${p.pnlPct.toFixed(2)}%)`;
+      return [
+        `<b>${p.type} ${p.pair}</b> @ ${p.entry.toFixed(p.digits)} | Lot: ${p.lotSize}`,
+        `Current: ${p.currentPrice.toFixed(p.digits)} | SL: ${p.sl.toFixed(p.digits)} | TP: ${p.tp.toFixed(p.digits)}`,
+        `P&L: ${pnlStr} (${p.pnlPct.toFixed(2)}%)`,
+        ``,
+      ].join("\n");
     });
     return [`<b>OPEN POSITIONS</b>`, ``, ...lines].join("\n");
   }
@@ -308,4 +379,4 @@ class TradeManager {
   }
 }
 
-module.exports = { TradeManager, PAIRS, getDigits, getContractSize };
+module.exports = { TradeManager, PAIRS, getDigits, getContractSize, pipsToPrice, priceToPips };

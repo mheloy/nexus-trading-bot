@@ -1,6 +1,8 @@
 // Module 10 — Telegram Command Handler
 // Processes incoming commands from Telegram (/status, /signals, etc.)
 
+const { isMarketOpen, getMarketStatus, getMarketStatusReport } = require("./market-hours");
+
 const SUPPORTED_PAIRS = [
   "EUR/USD", "GBP/USD", "USD/JPY", "XAU/USD", "USD/CAD", "AUD/USD",
 ];
@@ -122,6 +124,14 @@ class TelegramCommandHandler {
         await this.bot.sendDailySummary(this.tradeManager.getDailyStats());
         break;
 
+      case "/marketstatus": {
+        const report = getMarketStatusReport();
+        await this.bot.sendMessage(
+          `<b>📊 FOREX MARKET STATUS</b>\n\n<pre>${report}</pre>`
+        );
+        break;
+      }
+
       case "/pair": {
         if (args.length === 0) {
           // Show current pair and available pairs
@@ -205,6 +215,17 @@ class TelegramCommandHandler {
           return;
         }
 
+        // Check market hours
+        if (!isMarketOpen()) {
+          const marketStatus = getMarketStatus();
+          await this.bot.sendMessage(
+            `⏸️ <b>Markets Closed</b>\n\n` +
+            `Cannot execute trade: ${marketStatus.weekend ? "Weekend" : "Between sessions"}\n\n` +
+            `Next Open: ${marketStatus.nextEventTime.toUTCString()}`
+          );
+          return;
+        }
+
         // Get current price (from pairPrices map or fallback to PAIRS config)
         const currentPrice =
           this.pairPrices.get(pair)?.price ||
@@ -267,6 +288,17 @@ class TelegramCommandHandler {
         );
         if (!validation.valid) {
           await this.bot.sendMessage(`\u274C ${validation.error}`);
+          return;
+        }
+
+        // Check market hours
+        if (!isMarketOpen()) {
+          const marketStatus = getMarketStatus();
+          await this.bot.sendMessage(
+            `⏸️ <b>Markets Closed</b>\n\n` +
+            `Cannot execute trade: ${marketStatus.weekend ? "Weekend" : "Between sessions"}\n\n` +
+            `Next Open: ${marketStatus.nextEventTime.toUTCString()}`
+          );
           return;
         }
 
@@ -591,6 +623,7 @@ class TelegramCommandHandler {
             "/start \u2014 Welcome message & bot info",
             "/status \u2014 Balance & system status",
             "/market \u2014 All pair prices overview",
+            "/marketstatus \u2014 Check if markets are open",
             "",
             "<b>Trading & Signals</b>",
             "/signals \u2014 Last 5 trade signals",
@@ -657,6 +690,18 @@ class TelegramCommandHandler {
       const validation = this.validateTradeParams(pair, 0.1, this.tradeManager.balance);
       if (!validation.valid) {
         await this.bot.answerCallbackQuery(callbackQueryId, validation.error, true);
+        return;
+      }
+
+      // Check market hours
+      if (!isMarketOpen()) {
+        await this.bot.answerCallbackQuery(callbackQueryId, "Markets are closed", true);
+        const marketStatus = getMarketStatus();
+        await this.bot.sendMessage(
+          `⏸️ <b>Markets Closed</b>\n\n` +
+          `Cannot execute trade via button: ${marketStatus.weekend ? "Weekend" : "Between sessions"}\n\n` +
+          `Next Open: ${marketStatus.nextEventTime.toUTCString()}`
+        );
         return;
       }
 

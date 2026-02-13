@@ -8,16 +8,18 @@ const cors = require("cors");
 const { WebSocketServer, WebSocket } = require("ws");
 const http = require("http");
 const path = require("path");
+const fs = require("fs");
 
 const { enrichData } = require("./indicators");
 const { generateSignals } = require("./signal-engine");
-const { TradeManager, PAIRS } = require("./trade-manager");
+const { TradeManager, PAIRS, pipsToPrice } = require("./trade-manager");
 const { fetchCandles } = require("./twelvedata");
 const { TwelveDataStream } = require("./websocket-client");
 const { CandleAggregator, timeframeToMs } = require("./candle-aggregator");
 const { TelegramBot } = require("./telegram");
 const { TelegramCommandHandler } = require("./telegram-commands");
 const { Scheduler } = require("./scheduler");
+const { isMarketOpen, getMarketStatus } = require("./market-hours");
 
 // ── Configuration ──
 
@@ -35,11 +37,93 @@ const config = {
     port: parseInt(process.env.PORT || "3001"),
     dailySummaryHour: parseInt(process.env.DAILY_SUMMARY_HOUR || "23"),
   },
+  marketHours: {
+    enabled: process.env.ENABLE_MARKET_HOURS !== "false", // Default true
+    autoStopOnClose: process.env.AUTO_STOP_ON_MARKET_CLOSE === "true", // Default false
+    warnings: process.env.MARKET_HOURS_WARNING !== "false", // Default true
+  },
 };
+
+// Load trading parameters from .env
+const tradingParams = {
+  startingBalance: parseFloat(process.env.STARTING_BALANCE || "10000"),
+  lotSize: parseFloat(process.env.LOT_SIZE || "0.1"),
+  stopLossPips: parseFloat(process.env.STOP_LOSS_PIPS || "150"),
+  takeProfitPips: parseFloat(process.env.TAKE_PROFIT_PIPS || "300"),
+  trailingStopDistance: parseFloat(process.env.TRAILING_STOP_DISTANCE || "150"),
+  trailingStopActivation: parseFloat(process.env.TRAILING_STOP_ACTIVATION || "100"),
+};
+
+console.log("📊 Trading Parameters:", tradingParams);
 
 // ── Initialize Components ──
 
-const tradeManager = new TradeManager(10000);
+const tradeManager = new TradeManager(tradingParams.startingBalance);
+
+// ── Trade Persistence ──
+
+const TRADES_FILE = path.join(__dirname, "..", "data", "trades.json");
+let stateDirty = false;
+
+// Load trading state from JSON
+function loadTradingState() {
+  try {
+    if (fs.existsSync(TRADES_FILE)) {
+      const data = JSON.parse(fs.readFileSync(TRADES_FILE, "utf8"));
+      tradeManager.balance = data.balance || 10000;
+      tradeManager.startingBalance = data.startingBalance || 10000;
+      tradeManager.openPositions = data.openPositions || [];
+      tradeManager.tradeLog = data.tradeLog || [];
+      tradeManager.nextId = Math.max(...data.openPositions.map(p => p.id), ...data.tradeLog.map(t => t.id), 0) + 1;
+
+      // Load last used pair and timeframe
+      if (data.lastPair) currentPair = data.lastPair;
+      if (data.lastTimeframe) currentTimeframe = data.lastTimeframe;
+
+      console.log(`💾 Loaded trading state: ${data.openPositions.length} open positions, balance $${data.balance.toFixed(2)}, pair: ${currentPair}`);
+    }
+  } catch (err) {
+    console.error("❌ Failed to load trading state:", err.message);
+  }
+}
+
+// Save trading state to JSON
+function saveTradingState() {
+  try {
+    const state = {
+      balance: tradeManager.balance,
+      startingBalance: tradeManager.startingBalance,
+      openPositions: tradeManager.openPositions,
+      tradeLog: tradeManager.tradeLog,
+      lastPair: currentPair,
+      lastTimeframe: currentTimeframe,
+      lastSaved: new Date().toISOString(),
+    };
+
+    // Ensure data directory exists
+    const dataDir = path.join(__dirname, "..", "data");
+    if (!fs.existsSync(dataDir)) {
+      fs.mkdirSync(dataDir, { recursive: true });
+    }
+
+    fs.writeFileSync(TRADES_FILE, JSON.stringify(state, null, 2));
+    console.log(`💾 Saved trading state: ${state.openPositions.length} open, ${state.tradeLog.length} history`);
+  } catch (err) {
+    console.error("❌ Failed to save trading state:", err.message);
+  }
+}
+
+// Load on startup
+loadTradingState();
+
+// Auto-save every 60 seconds if dirty
+setInterval(() => {
+  if (stateDirty) {
+    saveTradingState();
+    stateDirty = false;
+  }
+}, 60000);
+
 const telegramBot = new TelegramBot(
   config.telegram.botToken,
   config.telegram.chatId
@@ -58,13 +142,13 @@ const tdStream = new TwelveDataStream(config.twelveData.apiKey);
 // Candle aggregators per pair/timeframe
 const aggregators = new Map();
 
-// Current state
-let currentPair = "EUR/USD";
-let currentTimeframe = "15min";
+// Current state (will be loaded from trades.json if available)
+let currentPair = process.env.DEFAULT_PAIR || "XAU/USD";
+let currentTimeframe = process.env.DEFAULT_TIMEFRAME || "5min";
 let currentData = [];
 let currentSrLevels = [];
 let currentSignals = [];
-let isLive = false;
+let currentMode = process.env.DEFAULT_MODE || "STOP"; // "STOP" | "SIMULATION" | "LIVE"
 let dataSource = config.twelveData.enabled ? "twelvedata" : "simulated";
 
 // ── Simulated Data Generator ──
@@ -166,12 +250,9 @@ app.get("/api/candles", async (req, res) => {
     currentTimeframe = tf;
     dataSource = source;
 
-    // Track signals
-    result.signals.forEach((s) => {
-      s.pair = pair;
-      signalHistory.push(s);
-      tradeManager.incrementSignalCount();
-    });
+    // NOTE: Do NOT add historical signals to signalHistory or send alerts
+    // Only live signals from handleLiveTick should be tracked
+    // Historical signals are just for chart visualization
 
     res.json({
       source,
@@ -213,8 +294,17 @@ app.post("/api/trade/open", (req, res) => {
     return res.status(400).json({ error: "No price data available" });
   }
 
-  const position = tradeManager.openTrade(type, pair || currentPair, tradePrice);
+  const config = {
+    lotSize: tradingParams.lotSize,
+    stopLossPips: tradingParams.stopLossPips,
+    takeProfitPips: tradingParams.takeProfitPips,
+    trailingStopDistance: tradingParams.trailingStopDistance,
+    trailingStopActivation: tradingParams.trailingStopActivation,
+  };
+
+  const position = tradeManager.openTrade(type, pair || currentPair, tradePrice, config);
   tradeManager.lastPrices.set(pair || currentPair, tradePrice);
+  stateDirty = true;
 
   // Telegram notification
   telegramBot.sendTradeUpdate(
@@ -235,11 +325,121 @@ app.post("/api/trade/close", (req, res) => {
     return res.status(404).json({ error: "Position not found" });
   }
 
+  stateDirty = true;
+
   // Telegram notification
   const eventType = closed.result === "WIN" ? "closed_win" : "closed_loss";
   telegramBot.sendTradeUpdate(closed, eventType);
 
   res.json({ closed, balance: tradeManager.balance });
+});
+
+// ── API: Configuration Management ──
+
+// GET /api/config - Get current trading parameters
+app.get("/api/config", (req, res) => {
+  res.json(tradingParams);
+});
+
+// POST /api/config - Update trading parameters (writes to .env)
+app.post("/api/config", (req, res) => {
+  const { startingBalance, lotSize, stopLossPips, takeProfitPips, trailingStopDistance, trailingStopActivation } = req.body;
+
+  // Validate
+  if (startingBalance && (startingBalance < 100 || startingBalance > 1000000)) {
+    return res.status(400).json({ error: "Starting balance must be between 100 and 1,000,000" });
+  }
+  if (lotSize && (lotSize < 0.01 || lotSize > 1.0)) {
+    return res.status(400).json({ error: "Lot size must be between 0.01 and 1.0" });
+  }
+  if (stopLossPips && (stopLossPips < 10 || stopLossPips > 3000)) {
+    return res.status(400).json({ error: "Stop loss must be between 10 and 3000 pips" });
+  }
+  if (takeProfitPips && (takeProfitPips < 10 || takeProfitPips > 5000)) {
+    return res.status(400).json({ error: "Take profit must be between 10 and 5000 pips" });
+  }
+  if (trailingStopDistance && (trailingStopDistance < 10 || trailingStopDistance > 3000)) {
+    return res.status(400).json({ error: "Trailing stop distance must be between 10 and 3000 pips" });
+  }
+  if (trailingStopActivation && (trailingStopActivation < 10 || trailingStopActivation > 3000)) {
+    return res.status(400).json({ error: "Trailing stop activation must be between 10 and 3000 pips" });
+  }
+
+  // Update in-memory config
+  if (startingBalance !== undefined) tradingParams.startingBalance = startingBalance;
+  if (lotSize !== undefined) tradingParams.lotSize = lotSize;
+  if (stopLossPips !== undefined) tradingParams.stopLossPips = stopLossPips;
+  if (takeProfitPips !== undefined) tradingParams.takeProfitPips = takeProfitPips;
+  if (trailingStopDistance !== undefined) tradingParams.trailingStopDistance = trailingStopDistance;
+  if (trailingStopActivation !== undefined) tradingParams.trailingStopActivation = trailingStopActivation;
+
+  // Write to .env file
+  try {
+    const envPath = path.join(__dirname, "..", ".env");
+    let envContent = fs.readFileSync(envPath, "utf8");
+
+    // Update or append each value
+    const updates = {
+      STARTING_BALANCE: startingBalance,
+      LOT_SIZE: lotSize,
+      STOP_LOSS_PIPS: stopLossPips,
+      TAKE_PROFIT_PIPS: takeProfitPips,
+      TRAILING_STOP_DISTANCE: trailingStopDistance,
+      TRAILING_STOP_ACTIVATION: trailingStopActivation,
+    };
+
+    for (const [key, value] of Object.entries(updates)) {
+      if (value !== undefined) {
+        const regex = new RegExp(`^${key}=.*$`, "m");
+        if (regex.test(envContent)) {
+          envContent = envContent.replace(regex, `${key}=${value}`);
+        } else {
+          envContent += `\n${key}=${value}`;
+        }
+      }
+    }
+
+    fs.writeFileSync(envPath, envContent);
+    console.log("📝 Updated .env with new trading parameters");
+  } catch (err) {
+    console.error("❌ Failed to write .env:", err.message);
+    return res.status(500).json({ error: "Failed to persist configuration" });
+  }
+
+  res.json({ success: true, config: tradingParams });
+});
+
+// POST /api/reset - Reset all trades and balance
+app.post("/api/reset", (req, res) => {
+  try {
+    // Close all open positions
+    tradeManager.openPositions = [];
+
+    // Clear trade log
+    tradeManager.tradeLog = [];
+
+    // Reset balance to starting balance
+    tradeManager.balance = tradingParams.startingBalance;
+    tradeManager.startingBalance = tradingParams.startingBalance;
+
+    // Reset trade ID counter
+    tradeManager.nextId = 1;
+
+    // Save to file
+    stateDirty = true;
+    saveTradingState();
+
+    console.log("🔄 Trading state reset to starting balance:", tradingParams.startingBalance);
+
+    res.json({
+      success: true,
+      balance: tradeManager.balance,
+      message: "All trades cleared and balance reset"
+    });
+  } catch (err) {
+    console.error("❌ Failed to reset trading state:", err.message);
+    return res.status(500).json({ error: "Failed to reset trading state" });
+  }
 });
 
 // API: Run backtest
@@ -403,16 +603,25 @@ app.post("/api/backtest", async (req, res) => {
 
 // API: System status
 app.get("/api/status", (req, res) => {
+  const marketStatus = getMarketStatus();
   res.json({
     dataSource,
     pair: currentPair,
     timeframe: currentTimeframe,
-    isLive,
+    mode: currentMode,
     balance: tradeManager.balance,
     openPositions: tradeManager.openPositions.length,
     telegramEnabled: config.telegram.enabled,
     twelveDataEnabled: config.twelveData.enabled,
     wsConnected: tdStream.isConnected(),
+    marketHours: {
+      enabled: config.marketHours.enabled,
+      open: marketStatus.open,
+      weekend: marketStatus.weekend,
+      activeSessions: marketStatus.activeSessions,
+      nextEvent: marketStatus.nextEvent,
+      nextEventTime: marketStatus.nextEventTime,
+    },
   });
 });
 
@@ -557,14 +766,19 @@ function handleLiveTick(tick) {
       const digits =
         PAIRS[currentPair]?.pip < 0.01 ? 4 : 2;
       s.digits = digits;
+
+      // Use pip-based SL/TP calculation (matches actual trade execution)
+      const slDistance = pipsToPrice(currentPair, tradingParams.stopLossPips);
+      const tpDistance = pipsToPrice(currentPair, tradingParams.takeProfitPips);
+
       s.sl =
         s.type === "BUY"
-          ? s.price * (1 - 0.002)
-          : s.price * (1 + 0.002);
+          ? s.price - slDistance
+          : s.price + slDistance;
       s.tp =
         s.type === "BUY"
-          ? s.price * (1 + 0.004)
-          : s.price * (1 - 0.004);
+          ? s.price + tpDistance
+          : s.price - tpDistance;
 
       signalHistory.push(s);
       tradeManager.incrementSignalCount();
@@ -572,6 +786,61 @@ function handleLiveTick(tick) {
         telegramBot.sendSignalAlert(s);
       }
     });
+
+    // Auto-execute signals in SIMULATION mode
+    if (currentMode === "SIMULATION") {
+      // Check market hours before auto-executing
+      if (config.marketHours.enabled && !isMarketOpen()) {
+        const marketStatus = getMarketStatus();
+        console.log(`⏸️  Auto-execution skipped: Markets closed (${marketStatus.weekend ? "Weekend" : "Between sessions"})`);
+
+        // Send warning to Telegram if enabled
+        if (config.marketHours.warnings && telegramBot.enabled && brandNewSignals.length > 0) {
+          telegramBot.sendMessage(
+            `⏸️ <b>Auto-Execution Blocked</b>\n\n` +
+            `Signal generated but markets are closed.\n` +
+            `${marketStatus.weekend ? "🔴 Weekend" : "🟡 Between sessions"}\n\n` +
+            `Next Open: ${marketStatus.nextEventTime.toUTCString()}`
+          );
+        }
+      } else {
+        for (const signal of brandNewSignals) {
+          // Check if position already exists for this pair (one position per pair)
+          const existingPos = tradeManager.openPositions.find(p => p.pair === currentPair);
+
+          if (existingPos) {
+            console.log(`⚠️  Signal skipped: position already open for ${currentPair} (#${existingPos.id})`);
+            continue;
+          }
+
+          // Auto-execute based on signal type
+          const config = {
+            lotSize: tradingParams.lotSize,
+            stopLossPips: tradingParams.stopLossPips,
+            takeProfitPips: tradingParams.takeProfitPips,
+            trailingStopDistance: tradingParams.trailingStopDistance,
+            trailingStopActivation: tradingParams.trailingStopActivation,
+          };
+
+          const position = tradeManager.openTrade(
+            signal.type,
+            currentPair,
+            signal.price,
+            config
+          );
+
+          console.log(`🤖 AUTO-EXECUTED ${signal.type} ${currentPair} @ ${signal.price.toFixed(position.digits)} (Signal confidence: ${signal.confidence.toFixed(0)}%)`);
+
+          // Send Telegram notification
+          if (telegramBot.enabled) {
+            telegramBot.sendTradeUpdate(position, "opened");
+          }
+
+          // Mark state as dirty for persistence
+          stateDirty = true;
+        }
+      }
+    }
   }
 
   currentSignals = signals;
@@ -592,6 +861,10 @@ function handleLiveTick(tick) {
             : "closed_loss";
     telegramBot.sendTradeUpdate(trade, eventType);
   });
+
+  if (closedTrades.length > 0) {
+    stateDirty = true;
+  }
 
   // Update pair price for Telegram /market command
   commandHandler.updatePairPrice(
@@ -619,14 +892,23 @@ function handleLiveTick(tick) {
   });
 }
 
-// ── API: Live Mode Control ──
+// ── API: Mode Control ──
 
-app.post("/api/live/start", async (req, res) => {
-  const { pair, timeframe } = req.body;
+app.post("/api/mode/start", async (req, res) => {
+  const { pair, timeframe, mode = "SIMULATION" } = req.body;
+
+  // Validate mode
+  if (!["SIMULATION", "LIVE"].includes(mode)) {
+    return res.status(400).json({ error: "Invalid mode. Use SIMULATION or LIVE." });
+  }
+
+  if (mode === "LIVE") {
+    return res.status(400).json({ error: "LIVE mode not yet implemented. Use SIMULATION." });
+  }
+
+  currentMode = mode;
   if (pair) currentPair = pair;
   if (timeframe) currentTimeframe = timeframe;
-
-  isLive = true;
 
   // Load initial data first
   const { source, data: rawData } = await getMarketData(
@@ -648,25 +930,33 @@ app.post("/api/live/start", async (req, res) => {
     dataSource = source === "twelvedata" ? "twelvedata" : "simulated";
   }
 
+  console.log(`▶️  ${mode} mode started: ${currentPair} ${currentTimeframe}`);
   res.json({
-    status: "live",
+    success: true,
+    mode: currentMode,
     pair: currentPair,
     timeframe: currentTimeframe,
     dataSource,
   });
 });
 
-app.post("/api/live/stop", (req, res) => {
-  isLive = false;
-  stopSimulatedLive();
-  tdStream.unsubscribe(currentPair);
-  res.json({ status: "stopped" });
+app.post("/api/mode/stop", (req, res) => {
+  // Stop streams
+  if (config.twelveData.enabled && tdStream.isConnected()) {
+    tdStream.unsubscribe(currentPair);
+  } else {
+    stopSimulatedLive();
+  }
+
+  currentMode = "STOP";
+  console.log("⏸️  Monitoring stopped");
+  res.json({ success: true, mode: currentMode });
 });
 
-// API: Switch pair/timeframe during live mode
-app.post("/api/live/switch", async (req, res) => {
+// API: Switch pair/timeframe during active mode
+app.post("/api/mode/switch", async (req, res) => {
   const { pair, timeframe } = req.body;
-  if (!isLive) {
+  if (currentMode === "STOP") {
     return res.status(400).json({ error: "Live mode is not active" });
   }
 
@@ -751,8 +1041,8 @@ server.listen(config.server.port, () => {
   commandHandler.onPairChange = async (newPair) => {
     const oldPair = currentPair;
 
-    // If live mode is active, properly switch the monitoring
-    if (isLive) {
+    // If monitoring is active, properly switch the pair
+    if (currentMode !== "STOP") {
       // Stop current stream
       if (config.twelveData.enabled && tdStream.isConnected()) {
         tdStream.unsubscribe(oldPair);
@@ -806,6 +1096,46 @@ server.listen(config.server.port, () => {
 
   // Start daily summary scheduler
   scheduler.start(config.server.dailySummaryHour);
+
+  // Auto-start monitoring if DEFAULT_MODE is set to SIMULATION
+  if (process.env.DEFAULT_MODE === "SIMULATION") {
+    console.log("🔄 Auto-starting SIMULATION mode from DEFAULT_MODE env variable...");
+
+    // Load initial data
+    getMarketData(currentPair, currentTimeframe)
+      .then(({ source, data: rawData }) => {
+        const result = processData(rawData, currentPair);
+        currentData = result.data;
+        currentSrLevels = result.srLevels;
+        currentSignals = result.signals;
+        dataSource = source;
+
+        // Start live tick stream
+        if (config.twelveData.enabled && tdStream.isConnected()) {
+          tdStream.subscribe(currentPair, handleLiveTick);
+          console.log(`✅ SIMULATION mode started with LIVE data for ${currentPair}`);
+        } else {
+          startSimulatedLive();
+          console.log(`✅ SIMULATION mode started with SIMULATED data for ${currentPair}`);
+        }
+
+        // Send startup notification to Telegram
+        if (telegramBot.enabled) {
+          telegramBot.sendMessage(
+            `🚀 <b>NEXUS Auto-Started</b>\n\n` +
+            `Mode: <b>SIMULATION</b>\n` +
+            `Pair: ${currentPair}\n` +
+            `Timeframe: ${currentTimeframe}\n` +
+            `Data Source: ${dataSource === "twelvedata" ? "LIVE" : "SIMULATED"}\n` +
+            `Markets: ${isMarketOpen() ? "🟢 OPEN" : "🔴 CLOSED"}\n\n` +
+            `Auto-execution is <b>ACTIVE</b>`
+          );
+        }
+      })
+      .catch(err => {
+        console.error("❌ Failed to auto-start SIMULATION mode:", err.message);
+      });
+  }
 });
 
 // ── Graceful Shutdown ──
